@@ -20,9 +20,11 @@ import { setDestination } from './movement';
  *
  * A worker standing on a tile adjacent to a resource is 1.0 tiles (orthogonal)
  * to 1.45 tiles (diagonal) from the node centre, so the reach must clear the
- * diagonal case or gathering never starts.
+ * diagonal case or gathering never starts. It is a little over two tiles so a
+ * villager blocked one tile short by a neighbouring node or a tree still works
+ * the resource instead of standing next to it forever.
  */
-const REACH = Math.trunc(FP_ONE * 1.9);
+const REACH = Math.trunc(FP_ONE * 2.4);
 const UNIT_REACH = Math.trunc(FP_ONE * 0.9);
 
 /** Reach for a building, accounting for its footprint radius. */
@@ -57,6 +59,40 @@ export function gatherSystem(world: World): void {
   }
 }
 
+/**
+ * The tile a worker should stand on to work a node. Nodes block their own tile,
+ * so pathing straight at the node left workers parked two tiles away, out of
+ * reach, forever. The generator guarantees an orthogonal neighbour is clear, so
+ * the worker is sent there instead.
+ */
+export function standTileFor(world: World, node: Entity): { x: number; y: number } {
+  const nx = node.x >> 10;
+  const ny = node.y >> 10;
+  const { width, height, passable } = world.map;
+  const orthogonal: Array<[number, number]> = [
+    [nx + 1, ny],
+    [nx - 1, ny],
+    [nx, ny + 1],
+    [nx, ny - 1],
+  ];
+  for (const [x, y] of orthogonal) {
+    if (x < 0 || y < 0 || x >= width || y >= height) continue;
+    if (passable[y * width + x] === 1) return { x, y };
+  }
+  // Fall back to anything walkable nearby.
+  for (let r = 1; r <= 3; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const x = nx + dx;
+        const y = ny + dy;
+        if (x < 0 || y < 0 || x >= width || y >= height) continue;
+        if (passable[y * width + x] === 1) return { x, y };
+      }
+    }
+  }
+  return { x: nx, y: ny };
+}
+
 /** Attach a gather order to a worker and start walking. */
 export function issueGather(world: World, e: Entity, nodeId: number, queueOrder: boolean): void {
   const node = world.get(nodeId);
@@ -75,7 +111,8 @@ export function issueGather(world: World, e: Entity, nodeId: number, queueOrder:
   e.gather.node = nodeId;
   const spec = NODE_RESOURCE[node.def];
   e.gather.resource = spec ? RESOURCE_INDEX.indexOf(spec) : 0;
-  setDestination(world, e, node.x, node.y, true);
+  const stand = standTileFor(world, node);
+  setDestination(world, e, (stand.x << 10) + 512, (stand.y << 10) + 512, true);
 }
 
 function runGather(world: World, e: Entity, nodeId: number, rateCache: Map<string, number>): void {
@@ -98,11 +135,29 @@ function runGather(world: World, e: Entity, nodeId: number, rateCache: Map<strin
   const nodeKind = node.kind === EntityKind.Building ? 'farm' : node.def;
   const dist = fpDist(e.x, e.y, node.x, node.y);
   if (dist > REACH) {
-    // Walk to the node if the destination drifted (node is static, so this is
-    // only recomputed when the worker was pushed away).
-    if (!e.hasGoal) setDestination(world, e, node.x, node.y, true);
+    // Walk to the node's standing tile, not to the node itself: the node blocks
+    // its own tile, so a path aimed at it leaves the worker out of reach.
+    if (!e.hasGoal) {
+      const stand = standTileFor(world, node);
+      setDestination(world, e, (stand.x << 10) + 512, (stand.y << 10) + 512, true);
+    }
+    // If the worker has been trying and failing to get in range, the node is
+    // walled off: give up on it and work something else rather than standing
+    // there for the rest of the match.
+    e.stuckTicks++;
+    if (e.stuckTicks > 20 * 12) {
+      e.stuckTicks = 0;
+      const wanted = RESOURCE_INDEX[e.gather.resource] ?? 'food';
+      const next = findNearestNode(world, e, wanted, node.id);
+      if (next) issueGather(world, e, next.id, false);
+      else {
+        e.orders.length = 0;
+        e.gather.node = 0;
+      }
+    }
     return;
   }
+  e.stuckTicks = 0;
 
   // In range: extract.
   if (e.hasGoal) {
@@ -195,7 +250,9 @@ function sendToDropOff(world: World, e: Entity): void {
   e.orders.length = 0;
   e.orders.push(order);
   e.gather.dropOff = target.id;
-  setDestination(world, e, target.x, target.y, true);
+  // Aim at a tile beside the building: a building blocks its whole footprint.
+  const stand = standTileFor(world, target);
+  setDestination(world, e, (stand.x << 10) + 512, (stand.y << 10) + 512, true);
 }
 
 function runReturn(world: World, e: Entity): void {
@@ -271,12 +328,18 @@ export function findDropOff(world: World, e: Entity): Entity | null {
 }
 
 /** Nearest resource node of a given resource key, weighted by distance. */
-export function findNearestNode(world: World, e: Entity, resource: ResourceKey): Entity | null {
+export function findNearestNode(
+  world: World,
+  e: Entity,
+  resource: ResourceKey,
+  exclude = 0,
+): Entity | null {
   let best: Entity | null = null;
   let bestD = Number.MAX_SAFE_INTEGER;
   for (let i = 0; i < world.entities.length; i++) {
     const n = world.entities[i];
     if (!n || !n.alive) continue;
+    if (n.id === exclude) continue;
     if (n.kind !== EntityKind.ResourceNode && !(n.kind === EntityKind.Building && n.def === 'farm')) {
       continue;
     }

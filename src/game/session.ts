@@ -70,6 +70,15 @@ export class GameSession {
   private minimapCanvas: HTMLCanvasElement | null = null;
   private selectionBox: ScreenRect | null = null;
   private lastSnapshot: StateSnapshot;
+  /** Diagnostics for the last rendered frame, exposed through window.__game. */
+  private lastModelCommands = -1;
+  private lastDrawError: string | null = null;
+  /** Why the command card came out empty, for diagnostics. */
+  private commandTrace = '';
+  /** Last render error already logged, to avoid flooding the console. */
+  private reportedDrawError: string | null = null;
+  /** Frames actually executed by the animation loop; frozen means the loop died. */
+  private frames = 0;
 
   constructor(services: SessionServices) {
     const s = services.settings;
@@ -100,6 +109,10 @@ export class GameSession {
 
     this.renderer = createRenderer(services.canvas);
     this.renderer.setMap(this.game.world.map);
+    // Open the match looking at the player's own base, not at the whole map.
+    // setMap() frames the entire map, which left the player staring at a mostly
+    // fogged, zoomed-out screen with their Town Center off-centre.
+    this.openOnHomeBase();
 
     const callbacks: HudCallbacks = {
       onCommand: (id) => this.runCommandButton(id),
@@ -136,6 +149,26 @@ export class GameSession {
     this.lastSnapshot = this.game.snapshot();
   }
 
+  /**
+   * Centre the camera on the player's starting Town Center and pull in to a
+   * working zoom, the way a match opens in the original.
+   */
+  private openOnHomeBase(): void {
+    let home: Entity | undefined;
+    for (const e of this.game.world.all()) {
+      if (e.owner === 0 && e.def === 'town_center') {
+        home = e;
+        break;
+      }
+    }
+    if (!home) return;
+    const camera = this.renderer.camera;
+    camera.centerOn(home.x, home.y);
+    // zoomBy takes a zoom-level multiplier; 1.6 brings the camera in from the
+    // map-framing distance to roughly the default play distance.
+    camera.zoomBy(1.6);
+  }
+
   /* ---------------------------------------------------------------- *
    * Lifecycle
    * ---------------------------------------------------------------- */
@@ -146,7 +179,17 @@ export class GameSession {
     this.lastTime = performance.now();
     const frame = (now: number): void => {
       if (!this.running) return;
-      this.tick(now);
+      this.frames++;
+      try {
+        this.tick(now);
+      } catch (error) {
+        // The loop must survive anything a frame throws.
+        this.lastDrawError = error instanceof Error ? error.message : String(error);
+        if (this.lastDrawError !== this.reportedDrawError) {
+          this.reportedDrawError = this.lastDrawError;
+          console.error('frame loop error', error);
+        }
+      }
       this.rafHandle = requestAnimationFrame(frame);
     };
     this.rafHandle = requestAnimationFrame(frame);
@@ -204,7 +247,30 @@ export class GameSession {
     this.elapsedTicks++;
   }
 
+  /**
+   * Draw one frame.
+   *
+   * The whole body is guarded: an exception anywhere in the render, audio or
+   * HUD path used to escape `tick()`, which meant `requestAnimationFrame` was
+   * never re-armed and the game froze permanently — the simulation kept running
+   * underneath while the screen and the command card stopped updating. A render
+   * error must never be able to kill the game loop.
+   */
   private draw(): void {
+    try {
+      this.drawFrame();
+      this.lastDrawError = null;
+    } catch (error) {
+      this.lastDrawError = error instanceof Error ? error.message : String(error);
+      // Log once per distinct message so a repeating error cannot flood.
+      if (this.lastDrawError !== this.reportedDrawError) {
+        this.reportedDrawError = this.lastDrawError;
+        console.error('frame failed', error);
+      }
+    }
+  }
+
+  private drawFrame(): void {
     const snapshot = this.game.snapshot();
     this.lastSnapshot = snapshot;
 
@@ -225,7 +291,9 @@ export class GameSession {
     this.renderer.sync(snapshot, this.selection, this.hovered);
     this.renderer.draw();
     this.audio.update(snapshot, 0);
-    this.hud.update(this.buildModel(snapshot));
+    const model = this.buildModel(snapshot);
+    this.lastModelCommands = model.commands.length;
+    this.hud.update(model);
   }
 
   /* ---------------------------------------------------------------- *
@@ -448,14 +516,21 @@ export class GameSession {
   computeCommands(): CommandButton[] {
     const buttons: CommandButton[] = [];
     const selected = this.selectedEntities();
-    if (selected.length === 0) return buttons;
+    if (selected.length === 0) {
+      this.commandTrace = 'no selection resolved';
+      return buttons;
+    }
 
     const player = this.game.world.players[0];
-    if (!player) return buttons;
+    if (!player) {
+      this.commandTrace = 'no local player';
+      return buttons;
+    }
 
     // Buildings: train units, research, age up.
     const building = selected.find((e) => e.kind === EntityKind.Building);
     if (building) {
+      this.commandTrace = `building branch: ${building.def} construction=${building.construction}`;
       const def = BUILDINGS[building.def];
       if (def && building.construction >= 1000) {
         let slot = 0;
@@ -517,6 +592,9 @@ export class GameSession {
 
     // Villagers: the build menu plus economic commands.
     const villagers = selected.filter((e) => UNITS[e.def]?.role === UnitRole.Worker);
+    this.commandTrace = `villager branch: ${villagers.length}/${selected.length} workers, kinds=[${selected
+      .map((e) => `${e.def}:${e.kind}`)
+      .join(',')}]`;
     if (villagers.length > 0) {
       let slot = 0;
       for (const defId of BUILDABLE) {
@@ -649,7 +727,10 @@ export class GameSession {
     const workers = this.selectedEntities()
       .filter((e) => e.kind === EntityKind.Unit && UNITS[e.def]?.canBuild)
       .map((e) => e.id);
-    const ok = this.issue({
+    // Apply immediately so the caller learns whether the spot is actually legal.
+    // Enqueuing always "succeeded", so a blocked placement was reported as
+    // accepted: the player lost the ghost and no building ever appeared.
+    const ok = this.applyNow({
       type: CommandType.Build,
       player: 0,
       units: workers,
@@ -658,10 +739,14 @@ export class GameSession {
       tileY,
       queue: false,
     });
+    if (!ok) {
+      // Stay armed so the player can try another spot.
+      this.hud.toast('Cannot build there — try another spot');
+      return false;
+    }
     this.pendingBuild = null;
-    if (!ok) this.hud.toast('Cannot build there');
-    else this.renderer.showOrderMarker(worldX, worldY, 'build');
-    return ok;
+    this.renderer.showOrderMarker(worldX, worldY, 'build');
+    return true;
   }
 
   cancelPendingBuild(): void {
@@ -807,6 +892,31 @@ export class GameSession {
 
   toast(message: string): void {
     this.hud.toast(message);
+  }
+
+  /** Frame diagnostics: how many commands the HUD was given, and any error. */
+  debugFrame(): {
+    commands: number;
+    selection: number;
+    resolved: number;
+    selectionIds: number[];
+    error: string | null;
+    frames: number;
+    running: boolean;
+    trace: string;
+    tick: number;
+  } {
+    return {
+      commands: this.lastModelCommands,
+      selection: this.selection.length,
+      resolved: this.selectedEntities().length,
+      selectionIds: [...this.selection],
+      error: this.lastDrawError,
+      frames: this.frames,
+      running: this.running,
+      trace: this.commandTrace,
+      tick: this.game.world.tick,
+    };
   }
 
   /** Enable or mute procedural audio. */

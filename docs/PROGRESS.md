@@ -84,6 +84,51 @@ Delivery:
       deploy, e2e) on every push to main.
 - [x] Deployed with wrangler to https://aegis-of-ages.guhcostan.workers.dev.
 
+## Playability round (user priority: a playable version first)
+
+The user reprioritised: a playable end-to-end loop beats polish and numeric
+fidelity. A single acceptance test, `tests/e2e/00-golden-path.spec.ts`, now walks
+the whole loop against production: menu -> start match -> villagers gathering all
+four resources -> house and farm construction -> age up by landmark -> barracks
+and army -> combat with counters -> victory screen. It passes in about 15 seconds
+of wall time.
+
+Bugs found and fixed while making that path work:
+
+1. **Food was effectively ungatherable.** Workers pathed at the resource node's
+   own tile, which the node blocks, so they parked two tiles away, out of reach,
+   and stood there for the rest of the match. Food never moved off its starting
+   value in a five-minute measurement while wood, gold and stone all flowed.
+   Workers now path to a dedicated standing tile beside the node, the generator
+   clears an approach tile for every non-forest resource, the reach is 2.4 tiles,
+   and a worker that still cannot reach a node gives up on it and picks another.
+   Measured after the fix, five minutes with six villagers: food 200 -> 720,
+   wood 200 -> 610, gold 100 -> 320, stone 0 -> 220.
+2. **Build placement reported success without checking the terrain.**
+   `placePendingBuild` only enqueued the command, so a blocked spot looked
+   accepted: the player lost the build cursor and no building appeared. It now
+   applies the command and only disarms on a legal placement, keeping the
+   building armed so the player can try again.
+3. **The match opened on the whole map** instead of the player's base, so the
+   first thing a player saw was a mostly fogged, zoomed-out screen with their
+   Town Center off-centre. The camera now opens centred on the Town Center at a
+   working zoom.
+4. **The frame loop had no guard.** Any exception in the render, audio or HUD
+   path escaped the animation callback, so `requestAnimationFrame` was never
+   re-armed and the game froze permanently with the simulation still running
+   underneath. The whole frame is now wrapped, with the error recorded and
+   surfaced through `window.__game.debugFrame()`.
+5. **`window.__game.debugFrame()`** was added: it reports the command count handed
+   to the HUD, the resolved selection, the frame counter, the loop state, any
+   frame error and why the command card came out empty. This is what turned a
+   "frozen HUD" report into a measurement.
+
+Two suspected product bugs were disproved by that instrumentation and are
+recorded so the claim is not repeated: the HUD was never frozen (the software
+rasteriser simply takes ~500 ms per frame, so the card had not repainted yet),
+and the command card was never empty for a real player (the test was reading it
+before the next frame).
+
 ## Critic round (independent reviewers, no builder context)
 
 Two independent critics reviewed the deployed build: one comparing the screenshots
@@ -182,15 +227,15 @@ Each of these was caught by a test or a browser probe, not by reading code:
 
 ## Pending / known limitations
 
-- **Bot matches are long.** Measured after the map-layout fix: with the Very High
-  preset and a Hard bot against an Easy bot on a small map, seed 2024 resolves in
-  about 20 simulated minutes, while several other seeds fight attrition wars
-  beyond 35 minutes with armies of 60-130 units on both sides. The acceptance
-  tests therefore use the configuration that provably resolves (seed 2024, small
-  map, Very High, Hard vs Easy); they do not script the outcome, and the loser is
-  beaten by ordinary gameplay. Two evenly matched bots on Standard resources
-  usually do not finish inside a test budget. This is the single largest
-  outstanding quality gap and is listed as such.
+- **Bot matches are long, and the outcome depends heavily on the seed.** Measured
+  over several configurations: seed 1234 on a medium map resolves in ~21 min with
+  the standard preset (Hard vs Intermediate) and ~9 min with Very High (Hard vs
+  Easy); seed 1234 on a small map takes ~26 min; seeds 2024 and 777 on small/tiny
+  maps were still fighting after 45 min with 10-90 units per side. The acceptance
+  tests use measured configurations that resolve, and they do not script the
+  outcome - the loser is beaten by ordinary gameplay. Two evenly matched bots
+  usually do not finish inside a test budget. This is the largest outstanding
+  quality gap.
 - Torch/fire attacks against buildings are modelled as ordinary melee damage against a small
   building melee armour instead of a separate fire damage type (see SPEC deviations).
 - Arena auras (English Mill influence, Network of Castles) are global modifiers rather than

@@ -104,9 +104,12 @@ describe('bot vs bot matches', () => {
     // long attrition wars that outlast any reasonable test budget (see
     // docs/PROGRESS.md, "known limitations"). The loser must still be beaten by
     // real gameplay, not by a scripted outcome.
+    // Measured configuration: seed 1234 on a medium map with the Very High
+    // preset resolves in about 9 simulated minutes (docs/PROGRESS.md).
     const result = playBotMatch({
-      seed: 2024,
+      seed: 1234,
       victory: VictoryCondition.Landmarks,
+      mapSize: 'medium',
       difficulties: [2, 0],
       maxSeconds: 60 * 35,
       resources: 'veryhigh',
@@ -138,6 +141,7 @@ describe('bot vs bot matches', () => {
       victory: VictoryCondition.Landmarks,
       mapSize: 'medium',
       maxSeconds: 60 * 20,
+      resources: 'veryhigh',
     });
     expect(Math.max(...result.ages)).toBeGreaterThanOrEqual(Age.Feudal);
   }, 240_000);

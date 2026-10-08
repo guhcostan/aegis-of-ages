@@ -43,6 +43,18 @@ export interface GameApi {
   fps(): number;
   /** Renderer counters: draw calls, live instances and the renderer's own fps. */
   renderStats(): { drawCalls: number; instances: number; fps: number };
+  /** Frame diagnostics: commands handed to the HUD, selection size, draw error. */
+  debugFrame(): {
+    commands: number;
+    selection: number;
+    resolved: number;
+    selectionIds: number[];
+    error: string | null;
+    frames: number;
+    running: boolean;
+    trace: string;
+    tick: number;
+  };
   /** Current selection. */
   selection(): number[];
   /** Replace the selection. */
@@ -130,6 +142,20 @@ export function installGameApi(hooks: ApiHooks): GameApi {
 
     renderStats: () =>
       requireSession()?.renderer.stats() ?? { drawCalls: 0, instances: 0, fps: 0 },
+
+    debugFrame: () =>
+      requireSession()?.debugFrame() ??
+      {
+        commands: -1,
+        selection: 0,
+        resolved: 0,
+        selectionIds: [],
+        error: null,
+        frames: 0,
+        running: false,
+        trace: '',
+        tick: -1,
+      },
 
     selection: () => requireSession()?.selection ?? [],
 

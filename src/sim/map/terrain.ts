@@ -444,6 +444,34 @@ export function generateMap(opts: MapGenOptions): GeneratedMap {
     relicSpots.push({ x: px, y: py });
   }
 
+  // Every resource node must be approachable: clear the four orthogonal
+  // neighbours of each one so a villager always has somewhere to stand. Sheep,
+  // mines and bushes placed inside a rock or forest pocket were ungatherable and
+  // the workers assigned to them stood next to the node forever.
+  for (const node of resourceNodes) {
+    if (node.kind === 'tree') continue; // forests are meant to be dense
+    const i0 = node.y * width + node.x;
+    passable[i0] = 0; // the node itself blocks its own tile
+    const neighbours: Array<[number, number]> = [
+      [node.x + 1, node.y],
+      [node.x - 1, node.y],
+      [node.x, node.y + 1],
+      [node.x, node.y - 1],
+    ];
+    for (const [nx, ny] of neighbours) {
+      if (nx < 1 || ny < 1 || nx >= width - 1 || ny >= height - 1) continue;
+      const j = ny * width + nx;
+      if (resourceAt[j] !== 0) continue;
+      if (terrain[j] === Terrain.Water || terrain[j] === Terrain.Rock) {
+        terrain[j] = Terrain.Dirt;
+        elevation[j] = 6;
+      }
+      if (terrain[j] === Terrain.Forest) terrain[j] = Terrain.Grass;
+      passable[j] = 1;
+      stealth[j] = 0;
+    }
+  }
+
   // Reserve the tiles used by sacred sites so buildings cannot overlap them.
   for (const s of sacredSiteSpots) {
     for (let dy = -1; dy <= 1; dy++) {

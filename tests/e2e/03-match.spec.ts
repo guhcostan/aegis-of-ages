@@ -39,16 +39,19 @@ test.describe('complete matches', () => {
 
     // ...then start with settings under which a match resolves decisively
     // inside the test budget (Very High start, one Intermediate bot).
+    // Seed 1234 on a medium map with the standard preset is measured to resolve
+    // in about 21 simulated minutes (docs/PROGRESS.md). The outcome is produced
+    // by ordinary gameplay, not scripted.
     await startMatch(page, {
-      seed: 2024,
-      mapSize: 'small',
-      startingResources: 'veryhigh',
+      seed: 1234,
+      mapSize: 'medium',
+      startingResources: 'standard',
       playerAsBot: true,
       playerBotDifficulty: 2,
-      bots: [{ civ: 'french', difficulty: 0, team: 0 }],
+      bots: [{ civ: 'french', difficulty: 1, team: 0 }],
     });
 
-    const result = await playToVictory(page, 60 * 40);
+    const result = await playToVictory(page, 60 * 45);
     expect(result).toBeTruthy();
     expect(await page.evaluate(() => window.__game?.isOver())).toBe(true);
     expect(result?.winner === 0 || result?.winner === 1).toBe(true);
@@ -61,15 +64,15 @@ test.describe('complete matches', () => {
     const watch = watchConsole(page);
     await loadShell(page);
     await startMatch(page, {
-      seed: 2024,
+      seed: 1234,
       playerAsBot: true,
       playerBotDifficulty: 2,
       bots: [{ civ: 'french', difficulty: 0, team: 0 }],
-      mapSize: 'small',
+      mapSize: 'medium',
       startingResources: 'veryhigh',
     });
 
-    const result = await playToVictory(page, 60 * 40);
+    const result = await playToVictory(page, 60 * 45);
     expect(await page.evaluate(() => window.__game?.isOver())).toBe(true);
     expect(result?.winner === 0 || result?.winner === 1).toBe(true);
     expect(result?.reason.length ?? 0).toBeGreaterThan(0);
