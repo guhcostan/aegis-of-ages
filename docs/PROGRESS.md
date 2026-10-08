@@ -19,9 +19,11 @@ Remaining work, in priority order:
    small at the default zoom, nothing casts a shadow, both factions share the same unit and
    building models (only the colour differs), the lower HUD is four floating panels rather than
    one continuous bar, and buildings are untextured blockouts.
-3. **Frame rate on real hardware.** 200+ units render in 741–772 instances across 24–27 draw
-   calls, but every measurement in this environment came from the SwiftShader software
-   rasteriser (4–8 fps), so 60 fps on a GPU has NOT been verified.
+3. **Frame rate on real hardware.** Measured with 234 units on screen: 672 live instances in 20
+   draw calls, and a CPU cost of **0.19 ms per frame** for a full sync + draw submission
+   (87x headroom against the 16.67 ms budget of 60 fps). The GPU-side frame rate itself is NOT
+   verified: every measurement in this environment came from the SwiftShader software
+   rasteriser (4–8 fps), which says nothing about a real GPU.
 
 ## Done (verified)
 

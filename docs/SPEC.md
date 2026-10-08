@@ -958,10 +958,12 @@ above that contradicts it.
 * **Victory conditions.** All three conditions reach a victory screen with no console errors:
   landmarks (raze every enemy landmark with siege), sacred sites (hold the sites for the
   countdown), wonder (build a Wonder and hold it for the countdown).
-* **Performance.** With 200+ units on screen the renderer reports 728 live instances in 23 draw
-  calls. The measured frame rate in CI is low because the test browser uses the SwiftShader
-  software rasteriser; the hardware-independent evidence is the instance and draw-call count
-  plus the renderer's own per-frame CPU cost recorded by the builder (0.68 ms/frame).
+* **Performance.** Measured against production with 234 units on screen: 672 live instances in
+  20 draw calls, and a CPU cost of 0.19 ms per frame for a full `sync()` + `draw()` submission,
+  measured over 150 frames after a 20-frame warm-up. That is 87x headroom against the 16.67 ms
+  frame budget of 60 fps on the CPU side. **The GPU-side frame rate is not verified**: every
+  measurement available here used the SwiftShader software rasteriser (4-8 fps), which is not
+  evidence about real hardware.
 
 ### 8.2 Deviations introduced or clarified this round
 
