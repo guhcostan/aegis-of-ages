@@ -81,6 +81,9 @@ export const BOT_PROFILES: BotProfile[] = [
 
 type ResourceKey = 'food' | 'wood' | 'gold' | 'stone';
 
+/** Sim resource index (0..3) back to its key, matching gather.resource. */
+const RESOURCE_OF_INDEX: ResourceKey[] = ['food', 'wood', 'gold', 'stone'];
+
 /** Build order: the buildings the bot wants, in priority order. */
 interface BuildOrderEntry {
   defId: string;
@@ -174,12 +177,17 @@ export class BotController {
     const counts = villagerCounts(w, this.playerId);
     const total = counts.food + counts.wood + counts.gold + counts.stone + counts.idle;
 
-    // Train villagers while there is room and we are under the target.
-    if (townCenter) {
+    // Train villagers while there is room and we are under the target, unless
+    // we are saving for the next age: a real build order banks first.
+    if (townCenter && !this.bankingForAgeUp()) {
       const reserved = reservedPopulation(w, this.playerId);
       const canGrow = player.pop + reserved + 1 <= player.popCap;
       const wantsVillagers = total < this.profile.villagerTarget && player.popCap >= 10;
-      if (canGrow && wantsVillagers && this.canAffordUnit('villager')) {
+      // Keep a food floor once the army matters, otherwise an endless villager
+      // queue eats every scrap of food and no soldier is ever trained.
+      const foodFloor = player.age >= Age.Feudal ? 180 : 0;
+      const hasFood = player.resources.food >= 50 + foodFloor;
+      if (canGrow && wantsVillagers && hasFood && this.canAffordUnit('villager')) {
         this.send({
           type: CommandType.Train,
           player: this.playerId,
@@ -190,14 +198,21 @@ export class BotController {
       }
     }
 
-    // Reassign idle villagers to whichever resource is most behind.
+    // Reassign idle villagers to whichever resource is furthest behind.
+    // The running counts are updated as we assign, otherwise every idle
+    // villager would be sent to the same resource and the economy stalls.
     const idle = this.idleVillagers();
     if (idle.length > 0) {
       const want = this.desiredShares();
+      const running = { ...counts };
+      let assigned = 0;
       for (const unit of idle) {
-        const resource = this.mostNeededResource(counts, want);
-        const node = this.findNode(resource);
-        if (!node) break;
+        // Pick the most needed resource that actually HAS a reachable node.
+        // Without this fallback a single exhausted resource leaves the whole
+        // workforce idle forever.
+        const picked = this.pickResourceWithNode(running, want);
+        if (!picked) break;
+        const { resource, node } = picked;
         this.send({
           type: CommandType.Gather,
           player: this.playerId,
@@ -205,17 +220,55 @@ export class BotController {
           target: node.id,
           queue: false,
         });
+        running[resource]++;
+        assigned++;
+        if (assigned >= 8) break;
       }
     }
 
-    // A farm economy is what carries the mid game.
-    if (player.age >= Age.Feudal && player.resources.wood >= 150) {
-      const farms = this.countBuildings('farm');
-      const foodWorkers = counts.food;
-      if (farms < Math.ceil(foodWorkers / 2) && this.constructionSites() < 3) {
-        this.tryBuild('farm');
-      }
+    // Rescue stalled sites: a building placed with nobody on it is wasted wood.
+    this.finishConstructionSites();
+
+    // Rebalance: if a resource is badly understaffed while another is
+    // overstaffed, move a few villagers across. This is what stops the bot
+    // from sitting on 13 foragers and no woodcutters.
+    this.rebalance()
+
+    // A farm economy is what carries the mid game: farms are infinite, so the
+    // bot must build them even when it currently has nobody on food (otherwise
+    // an exhausted sheep flock leaves it with no food income at all).
+    const wantFood = Math.max(4, Math.round((this.villagerCount() * this.desiredShares().food) / 100));
+    const farms = this.countBuildings('farm') + this.constructionSitesOf('farm');
+    if (farms < wantFood && player.resources.wood >= 100 && this.constructionSites() < 2) {
+      this.tryBuild('farm');
     }
+  }
+
+  /**
+   * True while the bot is saving for the next landmark. Ageing up is what
+   * unlocks every later unit and building, so a bot that never banks food and
+   * gold simply stays in the Dark Age forever.
+   */
+  private bankingForAgeUp(): boolean {
+    const player = this.world.players[this.playerId];
+    if (!player || player.age >= Age.Imperial) return false;
+    // Never stop growing the economy entirely: a real player keeps training
+    // villagers while saving for the age-up.
+    if (this.villagerCount() < 12) return false;
+    const nextAge = (player.age + 1) as Age;
+    const [a, b] = landmarkChoices(player.civ, nextAge);
+    // Already building it: villagers can flow again.
+    if (this.constructionSitesOf(a) + this.constructionSitesOf(b) > 0) return false;
+    if (this.countBuildings(a) + this.countBuildings(b) > 0) return false;
+    const defId = this.pickLandmark([a, b]);
+    const def = defId ? BUILDINGS[defId] : undefined;
+    if (!def) return false;
+    const eff = effectiveBuilding(this.world, this.playerId, def);
+    // Bank until the landmark is affordable, keeping a small food buffer for
+    // emergency units.
+    return (
+      player.resources.food < eff.cost.food + 50 || player.resources.gold < eff.cost.gold
+    );
   }
 
   private desiredShares(): Record<ResourceKey, number> {
@@ -229,23 +282,118 @@ export class BotController {
     return { food, wood: p.woodShare, gold, stone };
   }
 
-  private mostNeededResource(
+  /**
+   * Most needed resource that still has a node we can walk to, in deficit
+   * order. Returns null when the map has nothing left to gather.
+   */
+  private pickResourceWithNode(
     counts: { food: number; wood: number; gold: number; stone: number; idle: number },
     want: Record<ResourceKey, number>,
-  ): ResourceKey {
-    const total = counts.food + counts.wood + counts.gold + counts.stone;
-    if (total === 0) return 'food';
-    let best: ResourceKey = 'food';
-    let bestDeficit = -Infinity;
+  ): { resource: ResourceKey; node: Entity } | null {
     const keys: ResourceKey[] = ['food', 'wood', 'gold', 'stone'];
+    const total = counts.food + counts.wood + counts.gold + counts.stone;
+    const targetTotal = Math.max(1, total + 1);
+    const ordered = [...keys].sort((a, b) => {
+      const da = (want[a] / 100) * targetTotal - counts[a];
+      const db = (want[b] / 100) * targetTotal - counts[b];
+      if (db !== da) return db - da;
+      // Deterministic tie-break by resource order.
+      return keys.indexOf(a) - keys.indexOf(b);
+    });
+    for (const resource of ordered) {
+      const node = this.findNode(resource);
+      if (node) return { resource, node };
+    }
+    return null;
+  }
+
+  /**
+   * Move villagers from an overstaffed resource to an understaffed one.
+   * Runs rarely (every fifth decision) so it does not thrash.
+   */
+  private rebalance(): void {
+    if (this.world.tick % (this.profile.thinkInterval * 5) !== 0) return;
+    const counts = villagerCounts(this.world, this.playerId);
+    const want = this.desiredShares();
+    const keys: ResourceKey[] = ['food', 'wood', 'gold', 'stone'];
+    const total = counts.food + counts.wood + counts.gold + counts.stone;
+    if (total < 4) return;
+
+    let neediest: ResourceKey | null = null;
+    let biggestDeficit = 0;
+    let richest: ResourceKey | null = null;
+    let biggestSurplus = 0;
     for (const key of keys) {
-      const deficit = want[key] - (counts[key] / total) * 100;
-      if (deficit > bestDeficit) {
-        bestDeficit = deficit;
-        best = key;
+      const target = (want[key] / 100) * total;
+      const delta = target - counts[key];
+      if (delta > biggestDeficit && delta > 1) {
+        biggestDeficit = delta;
+        neediest = key;
+      }
+      if (-delta > biggestSurplus && -delta > 1) {
+        biggestSurplus = -delta;
+        richest = key;
       }
     }
-    return best;
+    if (!neediest || !richest || neediest === richest) return;
+
+    const node = this.findNode(neediest);
+    if (!node) return;
+    // Move at most two villagers per pass.
+    let moved = 0;
+    for (const e of this.world.all()) {
+      if (moved >= 2) break;
+      if (e.owner !== this.playerId || e.kind !== EntityKind.Unit) continue;
+      const def = UNITS[e.def];
+      if (!def || def.role !== UnitRole.Worker) continue;
+      const order = e.orders[0];
+      if (!order || (order.kind !== OrderKind.Gather && order.kind !== OrderKind.ReturnCargo)) continue;
+      const current = RESOURCE_OF_INDEX[e.gather.resource];
+      if (current !== richest) continue;
+      this.send({
+        type: CommandType.Gather,
+        player: this.playerId,
+        units: [e.id],
+        target: node.id,
+        queue: false,
+      });
+      moved++;
+    }
+  }
+
+  /**
+   * Send a villager to any site that has no builder on it. Sites can be left
+   * unattended when the assigned villager is pulled away or cannot path there,
+   * and an abandoned site never completes.
+   */
+  private finishConstructionSites(): void {
+    for (const e of this.world.all()) {
+      if (e.owner !== this.playerId || e.kind !== EntityKind.Building) continue;
+      if (e.construction >= 1000) continue;
+      if (e.builders > 0) continue;
+      const villager = this.freeVillagerNear(e.x, e.y);
+      if (!villager) continue;
+      this.send({
+        type: CommandType.Build,
+        player: this.playerId,
+        units: [villager.id],
+        defId: e.def,
+        tileX: e.x >> 10,
+        tileY: e.y >> 10,
+        queue: false,
+      });
+    }
+  }
+
+  /** How many villagers the bot currently owns. */
+  private villagerCount(): number {
+    let n = 0;
+    for (const e of this.world.all()) {
+      if (e.owner !== this.playerId || e.kind !== EntityKind.Unit) continue;
+      const def = UNITS[e.def];
+      if (def?.role === UnitRole.Worker) n++;
+    }
+    return n;
   }
 
   private idleVillagers(): Entity[] {
@@ -260,10 +408,22 @@ export class BotController {
     return out;
   }
 
+  /** How many of our villagers are already working a specific node. */
+  private workersOnNode(nodeId: number): number {
+    let n = 0;
+    for (const e of this.world.all()) {
+      if (e.owner !== this.playerId || e.kind !== EntityKind.Unit) continue;
+      if (e.gather.node === nodeId) n++;
+    }
+    return n;
+  }
+
   private findNode(resource: ResourceKey): Entity | null {
     let best: Entity | null = null;
     let bestD = Number.MAX_SAFE_INTEGER;
     for (const e of this.world.all()) {
+      // Farms take a single villager in AoE IV, and mines get crowded fast.
+      if (this.workersOnNode(e.id) >= (resource === 'food' ? 4 : 5)) continue;
       const isFarm = e.kind === EntityKind.Building && e.def === 'farm' && e.owner === this.playerId;
       if (e.kind !== EntityKind.ResourceNode && !isFarm) continue;
       if (e.kind === EntityKind.ResourceNode && e.amount <= 0) continue;
@@ -310,7 +470,7 @@ export class BotController {
       const have = this.countBuildings(entry.defId) + this.constructionSitesOf(entry.defId);
       if (have >= entry.count) continue;
       if (entry.defId === 'market' && player.age < Age.Feudal) continue;
-      if (this.constructionSites() >= 3) return;
+      if (this.constructionSites() >= 2) return;
       if (this.tryBuild(entry.defId)) return;
     }
   }
@@ -329,8 +489,7 @@ export class BotController {
     const def = BUILDINGS[preferred];
     if (!def) return;
     const eff = effectiveBuilding(this.world, this.playerId, def);
-    // Keep a small reserve so the bot can still train while it ages up.
-    if (!this.canAffordWithReserve(eff.cost, 100)) return;
+    if (!canAfford(player.resources, eff.cost)) return;
     this.tryBuild(preferred);
   }
 
@@ -371,10 +530,13 @@ export class BotController {
     const spot = this.findBuildSpot(defId, def.width, def.height);
     if (!spot) return false;
 
-    let builders = this.idleVillagers().slice(0, 2).map((e) => e.id);
+    let builders = this.idleVillagers()
+      .slice(0, 2)
+      .map((e) => e.id);
     if (builders.length === 0) {
-      // Pull the closest villager off its job rather than idling the bot.
-      const closest = this.closestVillager(spot.x << 10, spot.y << 10);
+      // Pull the closest villager that is NOT already building, otherwise the
+      // bot would keep abandoning half-finished sites.
+      const closest = this.freeVillagerNear(spot.x << 10, spot.y << 10);
       if (closest) builders = [closest.id];
     }
     if (builders.length === 0) return false;
@@ -452,13 +614,16 @@ export class BotController {
     return null;
   }
 
-  private closestVillager(x: number, y: number): Entity | null {
+  /** Closest villager that is gathering, not one that is mid-construction. */
+  private freeVillagerNear(x: number, y: number): Entity | null {
     let best: Entity | null = null;
     let bestD = Number.MAX_SAFE_INTEGER;
     for (const e of this.world.all()) {
       if (e.owner !== this.playerId || e.kind !== EntityKind.Unit) continue;
       const def = UNITS[e.def];
       if (!def || def.role !== UnitRole.Worker) continue;
+      const order = e.orders[0];
+      if (order && order.kind === OrderKind.Build) continue;
       const d = (e.x - x) * (e.x - x) + (e.y - y) * (e.y - y);
       if (d < bestD) {
         bestD = d;
@@ -621,20 +786,6 @@ export class BotController {
     if (!player || !def) return false;
     const eff = effectiveUnit(this.world, this.playerId, def);
     return canAfford(player.resources, eff.cost);
-  }
-
-  private canAffordWithReserve(
-    cost: { food: number; wood: number; gold: number; stone: number },
-    reserve: number,
-  ): boolean {
-    const player = this.world.players[this.playerId];
-    if (!player) return false;
-    return (
-      player.resources.food >= cost.food + reserve &&
-      player.resources.wood >= cost.wood + reserve &&
-      player.resources.gold >= cost.gold + reserve &&
-      player.resources.stone >= cost.stone
-    );
   }
 
   /* ---------------------------------------------------------------- *

@@ -153,6 +153,8 @@ export class World {
       goalY: y,
       hasGoal: false,
       repathAt: 0,
+      lastGoalDist: 0,
+      stuckTicks: 0,
       gather: { resource: 0, node: 0, progress: 0, carried: 0, dropOff: 0 },
       build: { site: 0, progress: 0 },
       carried: 0,

@@ -3,7 +3,7 @@
  * redirected mid-build. Progress is integer (0..1000 per building) and scales
  * with the number of villagers actually on site.
  */
-import { FP_ONE, TICK_RATE } from '../constants';
+import { FP_ONE } from '../constants';
 import { fpDist } from '../fixed';
 import { BuildingKind, EntityKind, OrderKind, UnitRole, type Entity } from '../types';
 import { UNITS } from '../data/units';
@@ -12,11 +12,59 @@ import type { World } from '../world';
 import { setDestination } from './movement';
 import { effectiveBuilding } from '../stats';
 
-/** How far a villager can reach the building footprint, in fixed point. */
-const REACH = Math.trunc(FP_ONE * 1.8);
+/**
+ * Base reach in fixed point. It must be measured from the building's CENTRE, so
+ * the footprint radius is added below: without that, a 3x3 or 4x4 building can
+ * never be reached because the villager cannot stand inside its own tiles.
+ */
+const REACH = Math.trunc(FP_ONE * 1.6);
 
-/** Base construction fraction per tick for one villager (1/1000 units). */
-const BASE_RATE = 1000 / (TICK_RATE * 16);
+/** Reach that actually reaches the edge of a building of this definition. */
+function reachFor(defId: string): number {
+  const def = BUILDINGS[defId];
+  if (!def) return REACH;
+  return REACH + Math.trunc((Math.max(def.width, def.height) * FP_ONE) / 2);
+}
+
+/**
+ * Construction speed.
+ *
+ * AoE IV defines a base build time per building (the time one villager needs)
+ * and gives every extra villager diminishing returns: the time fraction is
+ * 3/(N+2), so two villagers take 75% and ten take 25%.
+ *
+ * progress per tick = 1000 * (N + 2) / (3 * baseBuildTime)
+ */
+function constructionRate(builders: number, baseBuildTime: number): number {
+  if (builders <= 0 || baseBuildTime <= 0) return 0;
+  return Math.trunc((1000 * (builders + 2)) / (3 * baseBuildTime));
+}
+
+/** Existing unfinished building of ours occupying this tile, if any. */
+function findUnfinishedSite(
+  world: World,
+  playerId: number,
+  defId: string,
+  tileX: number,
+  tileY: number,
+): Entity | null {
+  const def = BUILDINGS[defId];
+  if (!def) return null;
+  for (let i = 0; i < world.entities.length; i++) {
+    const e = world.entities[i];
+    if (!e || !e.alive || e.kind !== EntityKind.Building) continue;
+    if (e.owner !== playerId || e.def !== defId) continue;
+    if (e.construction >= 1000) continue;
+    const ex = e.x >> 10;
+    const ey = e.y >> 10;
+    const left = ex - (def.width >> 1);
+    const top = ey - (def.height >> 1);
+    if (tileX >= left && tileX < left + def.width && tileY >= top && tileY < top + def.height) {
+      return e;
+    }
+  }
+  return null;
+}
 
 /** Attempt to place a building site and order the workers to build it. */
 export function placeBuilding(
@@ -36,6 +84,14 @@ export function placeBuilding(
   // Wall drag: place a run of segments between two points.
   if (def.isWallSegment && endX !== undefined && endY !== undefined) {
     return placeWallRun(world, playerId, defId, tileX, tileY, endX, endY, builderIds);
+  }
+
+  // Re-assigning builders to a site that already exists must not charge twice
+  // and must not create a second building on the same tiles.
+  const existing = findUnfinishedSite(world, playerId, defId, tileX, tileY);
+  if (existing) {
+    for (const id of builderIds) assignBuilder(world, id, existing, queueOrder);
+    return existing;
   }
 
   if (!world.canPlaceBuilding(defId, tileX, tileY)) return null;
@@ -143,8 +199,7 @@ export function buildSystem(world: World): void {
     if (b && b.alive && b.kind === EntityKind.Building) b.builders = 0;
   }
 
-  const progress = new Map<number, number>();
-
+  // Pass 1: walk every builder into range and count who is actually on site.
   for (let i = 0; i < world.entities.length; i++) {
     const e = world.entities[i];
     if (!e || !e.alive || e.kind !== EntityKind.Unit) continue;
@@ -162,15 +217,11 @@ export function buildSystem(world: World): void {
     if (site.construction >= 1000) {
       e.orders.length = 0;
       e.build.site = 0;
-      // Fall through to whatever the villager should do next.
-      const queued = e.orders[0];
-      if (!queued) e.build.site = 0;
       continue;
     }
 
     const dist = fpDist(e.x, e.y, site.x, site.y);
-    const reach = REACH + Math.trunc((site.def === 'town_center' ? FP_ONE : 0));
-    if (dist > reach) {
+    if (dist > reachFor(site.def)) {
       if (!e.hasGoal) setDestination(world, e, site.x, site.y, true);
       continue;
     }
@@ -178,22 +229,25 @@ export function buildSystem(world: World): void {
     e.path = [];
     e.pathIndex = 0;
     site.builders++;
-    const prev = progress.get(site.id) ?? 0;
-    const speedPct = 100; // Architecture-style bonuses applied via effective buildTime.
-    progress.set(site.id, prev + Math.max(1, Math.trunc((BASE_RATE * speedPct) / 100)));
   }
 
-  for (const [siteId, amount] of progress) {
-    const site = world.get(siteId);
-    if (!site) continue;
-    site.construction = Math.min(1000, site.construction + amount);
-    // Hit points grow with construction progress.
+  // Pass 2: advance every site by its own build time and builder count.
+  for (let i = 0; i < world.entities.length; i++) {
+    const site = world.entities[i];
+    if (!site || !site.alive || site.kind !== EntityKind.Building) continue;
+    if (site.construction >= 1000 || site.builders <= 0) continue;
     const def = BUILDINGS[site.def];
-    if (def) {
-      const target = effectiveBuilding(world, site.owner, def).hp;
-      site.maxHp = target;
-      site.hp = Math.max(1, Math.min(target, Math.trunc((target * site.construction) / 1000)));
-    }
+    if (!def) continue;
+    const eff = effectiveBuilding(world, site.owner, def);
+    site.construction = Math.min(
+      1000,
+      site.construction + Math.max(1, constructionRate(site.builders, eff.buildTime)),
+    );
+    // Hit points grow with construction progress.
+    const targetHp = effectiveBuilding(world, site.owner, def).hp;
+    site.maxHp = targetHp;
+    site.hp = Math.max(1, Math.min(targetHp, Math.trunc((targetHp * site.construction) / 1000)));
+
     if (site.construction >= 1000) {
       world.onBuildingComplete(site);
       // Send the builders back to work: gather the nearest resource.

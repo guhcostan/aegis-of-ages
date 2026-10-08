@@ -42,6 +42,31 @@ export function movementSystem(world: World): void {
       continue;
     }
 
+    // --- Progress watchdog -------------------------------------------------
+    // Units can end up walled in by a building placed around them, or unable to
+    // path out of a pocket. AoE IV never leaves a unit permanently stuck, so
+    // after three seconds without getting closer we release the goal and, if
+    // the unit is standing on or beside blocked ground, nudge it to the nearest
+    // walkable tile.
+    if (goalDist < e.lastGoalDist - 1) {
+      e.lastGoalDist = goalDist;
+      e.stuckTicks = 0;
+    } else {
+      e.stuckTicks++;
+      if (e.stuckTicks > 60) {
+        e.stuckTicks = 0;
+        e.lastGoalDist = goalDist;
+        const escaped = unstick(world, e);
+        if (!escaped) {
+          // Genuinely unreachable: give up on this goal rather than spinning.
+          e.hasGoal = false;
+          e.path = [];
+          e.pathIndex = 0;
+          e.stuckTicks = 0;
+        }
+      }
+    }
+
     let moved = false;
     if (e.path.length > e.pathIndex * 2) {
       const wx = e.path[e.pathIndex * 2] as number;
@@ -137,6 +162,39 @@ export function movementSystem(world: World): void {
     if (e.x > maxX) e.x = maxX;
     if (e.y > maxY) e.y = maxY;
   }
+}
+
+/**
+ * Move a stranded unit to the closest walkable tile within a small radius.
+ * Returns false when the unit is already on open ground (nothing to fix).
+ */
+function unstick(world: World, e: Entity): boolean {
+  const tx = e.x >> 10;
+  const ty = e.y >> 10;
+  const { width, height, passable } = world.map;
+  if (tx >= 0 && ty >= 0 && tx < width && ty < height && passable[ty * width + tx] === 1) {
+    // Standing on open ground: the goal is simply unreachable.
+    return false;
+  }
+  // Find the nearest walkable tile and step onto it.
+  for (let r = 1; r <= 6; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+        const x = tx + dx;
+        const y = ty + dy;
+        if (x < 0 || y < 0 || x >= width || y >= height) continue;
+        if (passable[y * width + x] !== 1) continue;
+        e.x = (x << 10) + 512;
+        e.y = (y << 10) + 512;
+        e.path = [];
+        e.pathIndex = 0;
+        e.hasGoal = false;
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function isFree(world: World, x: number, y: number): boolean {

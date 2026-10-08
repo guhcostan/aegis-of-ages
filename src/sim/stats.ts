@@ -45,8 +45,16 @@ interface ModTable {
 }
 
 const modCache = new WeakMap<PlayerState, ModTable>();
-const unitCache = new WeakMap<PlayerState, Map<string, EffectiveUnit>>();
-const buildingCache = new WeakMap<PlayerState, Map<string, EffectiveBuilding>>();
+interface CachedUnit {
+  version: number;
+  value: EffectiveUnit;
+}
+interface CachedBuilding {
+  version: number;
+  value: EffectiveBuilding;
+}
+const unitCache = new WeakMap<PlayerState, Map<string, CachedUnit>>();
+const buildingCache = new WeakMap<PlayerState, Map<string, CachedBuilding>>();
 
 /** Gather every effect that applies to a player, in a stable order. */
 function effectsFor(player: PlayerState): TechEffect[] {
@@ -152,7 +160,8 @@ export function effectiveUnit(world: World, playerId: number, def: UnitDef): Eff
   }
   const key = `${def.id}`;
   const hit = cache.get(key);
-  if (hit) return hit;
+  // A completed technology or an age-up bumps modVersion; the cache must follow.
+  if (hit && hit.version === player.modVersion) return hit.value;
 
   const effects = effectsFor(player);
   const targets = (e: TechEffect): boolean => e.only === null || e.only === def.id;
@@ -179,7 +188,7 @@ export function effectiveUnit(world: World, playerId: number, def: UnitDef): Eff
     },
     carry: applyStat(10, effects, TechStat.CarryCapacity, pred),
   };
-  cache.set(key, result);
+  cache.set(key, { version: player.modVersion, value: result });
   return result;
 }
 
@@ -207,7 +216,7 @@ export function effectiveBuilding(
     buildingCache.set(player, cache);
   }
   const hit = cache.get(def.id);
-  if (hit) return hit;
+  if (hit && hit.version === player.modVersion) return hit.value;
 
   const effects = effectsFor(player);
   const targets = (e: TechEffect): boolean => e.only === null || e.only === def.id;
@@ -227,7 +236,7 @@ export function effectiveBuilding(
       stone: applyStat(def.cost.stone, effects, TechStat.CostStone, (e) => ap(TechStat.CostStone, e)),
     },
   };
-  cache.set(def.id, result);
+  cache.set(def.id, { version: player.modVersion, value: result });
   return result;
 }
 

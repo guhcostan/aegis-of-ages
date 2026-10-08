@@ -376,6 +376,10 @@ export interface Entity {
   hasGoal: boolean;
   /** Repath cooldown so a stuck unit does not path every tick. */
   repathAt: number;
+  /** Last distance to goal, used to detect that a unit is making no progress. */
+  lastGoalDist: number;
+  /** Ticks during which the unit has failed to get closer to its goal. */
+  stuckTicks: number;
   gather: GatherState;
   build: BuildState;
   /** Worker carrying type. */
