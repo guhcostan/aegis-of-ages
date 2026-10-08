@@ -79,7 +79,7 @@ export function issueGather(world: World, e: Entity, nodeId: number, queueOrder:
 }
 
 function runGather(world: World, e: Entity, nodeId: number, rateCache: Map<string, number>): void {
-  let node = world.get(nodeId);
+  const node = world.get(nodeId);
 
   // Node depleted or gone: look for the nearest node of the same resource.
   if (!node) {

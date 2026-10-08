@@ -13,7 +13,7 @@ import { UNITS } from '../data/units';
 import { BUILDINGS } from '../data/buildings';
 import { effectiveBuilding, effectiveUnit } from '../stats';
 import type { World } from '../world';
-import { setDestination, sizeOf } from './movement';
+import { octantAngle, setDestination, sizeOf } from './movement';
 
 /** Range within which units will pick a fight on their own. */
 const AGGRO_RADIUS = Math.trunc(FP_ONE * 7);
@@ -400,16 +400,7 @@ function runBuildingAttack(world: World, b: Entity, baseAttack: number): void {
 
 /** Integer angle from A to B in 1/256 turns. */
 export function angleTo(ax: number, ay: number, bx: number, by: number): number {
-  const dx = bx - ax;
-  const dy = by - ay;
-  if (dx === 0 && dy === 0) return 0;
-  const axAbs = Math.abs(dx);
-  const ayAbs = Math.abs(dy);
-  const ratio = ayAbs === 0 ? 0 : Math.trunc((axAbs * 64) / (axAbs + ayAbs));
-  if (dx >= 0 && dy >= 0) return ratio & 255;
-  if (dx < 0 && dy >= 0) return (128 - ratio) & 255;
-  if (dx < 0 && dy < 0) return (128 + ratio) & 255;
-  return (256 - ratio) & 255;
+  return octantAngle(bx - ax, by - ay);
 }
 
 export { sizeOf };

@@ -1444,17 +1444,13 @@ function syncResult(dom: HudDom, model: HudModel): void {
  * ------------------------------------------------------------------ */
 
 /** `Hud` plus the session-facing extras documented at the top of this file. */
-export interface HudHandle extends Hud {
-  /** The live minimap canvas the session paints every frame. */
-  getMinimapCanvas(): HTMLCanvasElement;
-  /**
-   * Tell the HUD how many tiles the map spans. Required once at match start
-   * for accurate minimap clicks (`hud.setWorldSize(map.width, map.height)`).
-   */
-  setWorldSize(widthTiles: number, heightTiles: number): void;
-}
+/**
+ * The concrete HUD handle. `getMinimapCanvas` and `setWorldSize` are also part
+ * of the `Hud` contract, so callers may depend on the interface alone.
+ */
+export type HudHandle = Hud;
 
-export function createHud(root: HTMLElement, callbacks: HudCallbacks): HudHandle {
+export function createHud(root: HTMLElement, callbacks: HudCallbacks): Hud {
   const dom = buildDom(root, callbacks);
   wireInteractions(dom, callbacks);
   let disposed = false;

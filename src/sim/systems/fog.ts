@@ -40,7 +40,7 @@ export function updateFog(world: World, fog: PlayerFog, playerId: number, force 
     const e = world.entities[i];
     if (!e || !e.alive || e.owner !== playerId) continue;
     if (e.kind === EntityKind.Projectile) continue;
-    let los = 0;
+    let los: number;
     if (e.kind === EntityKind.Building) {
       const def = BUILDINGS[e.def];
       if (!def) continue;

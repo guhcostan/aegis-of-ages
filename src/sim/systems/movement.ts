@@ -54,10 +54,8 @@ export function movementSystem(world: World): void {
         e.pathIndex++;
         moved = true;
       } else if (d > 0) {
-        const nx = e.x + Math.trunc(((wx - e.x) * speed) / d);
-        const ny = e.y + Math.trunc(((wy - e.y) * speed) / d);
-        e.x = nx;
-        e.y = ny;
+        e.x += Math.trunc(((wx - e.x) * speed) / d);
+        e.y += Math.trunc(((wy - e.y) * speed) / d);
         moved = true;
       }
     }
@@ -158,16 +156,24 @@ function updateFacing(e: Entity): void {
   const dx = e.goalX - e.x;
   const dy = e.goalY - e.y;
   if (dx === 0 && dy === 0) return;
-  // Angle in 1/256 turns, computed with integer atan2 over the 8 octants.
-  let angle = 0;
+  e.facing = octantAngle(dx, dy);
+}
+
+/**
+ * Angle from a direction vector, in 1/256 turns, using integer octant math.
+ * Shared by movement and combat so facing is computed one single way.
+ */
+export function octantAngle(dx: number, dy: number): number {
   const ax = Math.abs(dx);
   const ay = Math.abs(dy);
+  if (ax === 0 && ay === 0) return 0;
   const ratio = ay === 0 ? 0 : Math.trunc((ax * 64) / (ax + ay));
+  let angle: number;
   if (dx >= 0 && dy >= 0) angle = ratio;
   else if (dx < 0 && dy >= 0) angle = 128 - ratio;
   else if (dx < 0 && dy < 0) angle = 128 + ratio;
   else angle = 256 - ratio;
-  e.facing = angle & 255;
+  return angle & 255;
 }
 
 /** Clear the movement goal when the unit has arrived. */
@@ -203,14 +209,5 @@ export function setDestination(world: World, e: Entity, x: number, y: number, qu
 
 /** Teleport-free helper for tests and spawn logic. */
 export function faceToward(e: Entity, x: number, y: number): void {
-  const dx = x - e.x;
-  const dy = y - e.y;
-  if (dx === 0 && dy === 0) return;
-  const ax = Math.abs(dx);
-  const ay = Math.abs(dy);
-  const ratio = ay === 0 ? 0 : Math.trunc((ax * 64) / (ax + ay));
-  if (dx >= 0 && dy >= 0) e.facing = ratio & 255;
-  else if (dx < 0 && dy >= 0) e.facing = (128 - ratio) & 255;
-  else if (dx < 0 && dy < 0) e.facing = (128 + ratio) & 255;
-  else e.facing = (256 - ratio) & 255;
+  e.facing = octantAngle(x - e.x, y - e.y);
 }

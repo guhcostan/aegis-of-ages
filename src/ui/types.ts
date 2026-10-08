@@ -106,6 +106,10 @@ export interface HudCallbacks {
 export interface Hud {
   /** Rebuild the DOM from a model. Cheap enough to call every frame. */
   update(model: HudModel): void;
+  /** The live minimap canvas, which the session paints every frame. */
+  getMinimapCanvas(): HTMLCanvasElement;
+  /** Map dimensions in tiles, so minimap clicks resolve to the right world point. */
+  setWorldSize(widthTiles: number, heightTiles: number): void;
   /** Show or hide the whole HUD. */
   setVisible(visible: boolean): void;
   /** Flash a short message in the middle of the screen. */
@@ -124,6 +128,13 @@ export interface LobbySettings {
   startingResources: 'standard' | 'high' | 'veryhigh';
   seed: number;
   revealMap: boolean;
+  /**
+   * When true the local player is driven by the AI as well, which is how the
+   * bot-vs-bot acceptance test runs. Not exposed in the menu.
+   */
+  playerAsBot?: boolean;
+  /** Bot profile used for the local player when `playerAsBot` is set. */
+  playerBotDifficulty?: 0 | 1 | 2;
 }
 
 export interface Menu {
@@ -134,3 +145,16 @@ export interface Menu {
 }
 
 export type { StateSnapshot };
+
+/** Default skirmish settings: English vs one Intermediate French bot. */
+export const DEFAULT_LOBBY: LobbySettings = {
+  playerName: 'You',
+  civ: 'english',
+  mapSize: 'medium',
+  mapType: 'grassland',
+  bots: [{ civ: 'french', difficulty: 1, team: 0 }],
+  victory: 0,
+  startingResources: 'standard',
+  seed: 1234,
+  revealMap: false,
+};

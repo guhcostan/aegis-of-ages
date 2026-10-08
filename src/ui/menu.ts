@@ -96,7 +96,7 @@ interface StartChoice {
 }
 
 const START_CHOICES: StartChoice[] = [
-  { id: 'standard', label: 'Standard', blurb: '200 food · 150 wood · 100 gold' },
+  { id: 'standard', label: 'Standard', blurb: '200 food · 200 wood · 100 gold' },
   { id: 'high', label: 'High', blurb: '2,000 food · 2,000 wood · 1,000 gold · 800 stone' },
   { id: 'veryhigh', label: 'Very High', blurb: '50,000 food · 50,000 wood · 25,000 gold · 10,000 stone' },
 ];
