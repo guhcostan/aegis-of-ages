@@ -6,9 +6,22 @@ open bugs. Every claim below was checked by running something, not by reading al
 
 ## Current phase
 
-Phases 0–9 are implemented and the acceptance suite runs green against production
-(https://aegis-of-ages.guhcostan.workers.dev). Current work is hardening: the e2e suite keeps
-finding real bugs, and each round fixes them and adds coverage rather than relaxing tests.
+Phases 0–9 are implemented. The acceptance suite is green both locally against production and
+in CI (run 37853096978: lint/typecheck/unit, deploy and e2e all pass). The build is deployed at
+https://aegis-of-ages.guhcostan.workers.dev and tagged `v1`.
+
+Remaining work, in priority order:
+
+1. **Bot match length.** Two evenly matched bots on Standard resources usually fight past 35
+   simulated minutes without a decision. Hard-vs-Easy on a small map with the Very High preset
+   resolves in about 20 minutes, which is what the acceptance tests use.
+2. **Visual fidelity gaps** reported by the fidelity critic and not yet addressed: units are
+   small at the default zoom, nothing casts a shadow, both factions share the same unit and
+   building models (only the colour differs), the lower HUD is four floating panels rather than
+   one continuous bar, and buildings are untextured blockouts.
+3. **Frame rate on real hardware.** 200+ units render in 741–772 instances across 24–27 draw
+   calls, but every measurement in this environment came from the SwiftShader software
+   rasteriser (4–8 fps), so 60 fps on a GPU has NOT been verified.
 
 ## Done (verified)
 
