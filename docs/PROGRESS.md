@@ -84,6 +84,34 @@ Delivery:
       deploy, e2e) on every push to main.
 - [x] Deployed with wrangler to https://aegis-of-ages.guhcostan.workers.dev.
 
+## Reported bug: black viewport at match start (fixed)
+
+The user reported that after Start match the 3D viewport was almost entirely
+black with a diagonal blue band, and that the minimap's camera frustum pointed
+outside the map.
+
+Root cause: the starting-position generator maximised the distance between bases
+over every walkable tile, which pushed them to the rim of the landmass — measured
+8 to 12 tiles from the map edge. The camera opened correctly on the Town Center,
+but a base that close to the border means most of the view is off-map, which
+renders as black plus a strip of water.
+
+Fixes:
+- candidate tiles for a base are now restricted to 62% of the land radius and to
+  a margin of 15% of the map from every border (relaxed progressively only if a
+  map is too tight to host the requested players). Measured minimum edge margin
+  is now 20/25/34/41 tiles on tiny/small/medium/large, with base separation
+  still 36-97 tiles.
+- the camera focus is clamped with an 8% margin instead of to the exact border,
+  so panning to the edge no longer fills the screen with empty space.
+- `window.__game.viewCoverage()` was added: the fraction of the visible ground
+  that lies inside the map. Two e2e tests now assert it stays above 85% at match
+  start on every map size, which is the regression guard for exactly this report.
+
+Verified against production at the reported resolution (1400x900): camera focus
+on the Town Center, distance 28, view coverage 100%, minimap frustum inside the
+map.
+
 ## Playability round (user priority: a playable version first)
 
 The user reprioritised: a playable end-to-end loop beats polish and numeric

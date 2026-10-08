@@ -100,6 +100,12 @@ export interface Renderer {
   /** Performance counters for the e2e fps test. */
   stats(): { drawCalls: number; instances: number; fps: number };
 
+  /**
+   * Fraction (0..1) of the visible ground that lies inside the map. Guards
+   * against the camera opening on empty space at the map border.
+   */
+  groundCoverage(): number;
+
   dispose(): void;
 }
 

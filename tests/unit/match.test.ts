@@ -105,7 +105,7 @@ describe('bot vs bot matches', () => {
     // docs/PROGRESS.md, "known limitations"). The loser must still be beaten by
     // real gameplay, not by a scripted outcome.
     // Measured configuration: seed 1234 on a medium map with the Very High
-    // preset resolves in about 9 simulated minutes (docs/PROGRESS.md).
+    // preset resolves in about 17 simulated minutes (docs/PROGRESS.md).
     const result = playBotMatch({
       seed: 1234,
       victory: VictoryCondition.Landmarks,

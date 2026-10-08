@@ -43,6 +43,8 @@ export interface GameApi {
   fps(): number;
   /** Renderer counters: draw calls, live instances and the renderer's own fps. */
   renderStats(): { drawCalls: number; instances: number; fps: number };
+  /** Fraction (0..1) of the visible ground that is inside the map. */
+  viewCoverage(): number;
   /** Frame diagnostics: commands handed to the HUD, selection size, draw error. */
   debugFrame(): {
     commands: number;
@@ -142,6 +144,8 @@ export function installGameApi(hooks: ApiHooks): GameApi {
 
     renderStats: () =>
       requireSession()?.renderer.stats() ?? { drawCalls: 0, instances: 0, fps: 0 },
+
+    viewCoverage: () => requireSession()?.renderer.groundCoverage() ?? 0,
 
     debugFrame: () =>
       requireSession()?.debugFrame() ??

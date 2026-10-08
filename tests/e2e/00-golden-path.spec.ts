@@ -160,6 +160,18 @@ test.describe('golden path: a playable match from the menu to victory', () => {
     await expect(page.getByRole('button', { name: 'Start match' })).toBeVisible();
     await page.getByRole('button', { name: 'Start match' }).click();
     await page.waitForFunction(() => window.__game?.ready() === true, null, { timeout: 30_000 });
+    // This walkthrough takes ten-plus simulated minutes; restart it against an
+    // Easy opponent so the stages are not interrupted by a rush. The victory
+    // step later plays the match out with a Hard simulated player.
+    await page.evaluate(() => {
+      window.__aegis?.startMatch({
+        seed: 1234,
+        mapSize: 'medium',
+        bots: [{ civ: 'french', difficulty: 0, team: 0 }],
+        startPaused: true,
+      } as never);
+    });
+    await page.waitForFunction(() => window.__game?.ready() === true, null, { timeout: 30_000 });
 
     // Pause so every later stage advances exactly the ticks it asks for.
     await page.evaluate(() => window.__game?.pause());
@@ -184,6 +196,13 @@ test.describe('golden path: a playable match from the menu to victory', () => {
     expect(framing?.dx ?? 99, 'the camera did not open on the Town Center').toBeLessThanOrEqual(2);
     expect(framing?.dy ?? 99).toBeLessThanOrEqual(2);
     expect(framing?.distance ?? 0, 'the camera opened too far out').toBeLessThan(45);
+
+    // The viewport must be filled with terrain, not empty space: a base near the
+    // map border used to open on a mostly black screen with a strip of ground.
+    const coverage = await page.evaluate(() => window.__game?.viewCoverage() ?? 0);
+    expect(coverage, `only ${Math.round(coverage * 100)}% of the view is over the map`).toBeGreaterThan(
+      0.85,
+    );
 
     /* ---------------------------------------------------------------- *
      * 3. Villagers gather all four resources
@@ -288,14 +307,23 @@ test.describe('golden path: a playable match from the menu to victory', () => {
     });
     await waitForCard(page, 4);
 
-    const landmarkClicked = await page.evaluate(() => {
-      const button = document.querySelector('#hud-root .aoe-cmd[data-cmd^="build:council_hall"]') as HTMLButtonElement | null;
-      const alt = document.querySelector('#hud-root .aoe-cmd[data-cmd^="build:abbey_of_kings"]') as HTMLButtonElement | null;
-      const target = button ?? alt;
-      if (!target) return null;
-      target.click();
-      return window.__aegis?.session?.pendingBuild ?? null;
-    });
+    // Wait for the villager card to actually offer a landmark: counting generic
+    // buttons could match the previous selection's card.
+    const landmarkClicked = await page
+      .waitForFunction(
+        () => {
+          const button = document.querySelector(
+            '#hud-root .aoe-cmd[data-cmd^="build:council_hall"], #hud-root .aoe-cmd[data-cmd^="build:abbey_of_kings"]',
+          ) as HTMLButtonElement | null;
+          if (!button) return false;
+          button.click();
+          return window.__aegis?.session?.pendingBuild ?? false;
+        },
+        null,
+        { timeout: 30_000 },
+      )
+      .then((handle) => handle.jsonValue() as Promise<string | null>)
+      .catch(() => null);
     expect(landmarkClicked, 'no landmark button on the command card').toBeTruthy();
     expect(await placePendingBuildNear(page, 6), 'the landmark could not be placed').toBe(true);
     // A Feudal Age landmark has a 190 s base build time.
@@ -350,15 +378,31 @@ test.describe('golden path: a playable match from the menu to victory', () => {
     expect(trained, `the barracks card has no spearman button: ${await cardContents(page)}`).toBe(true);
 
     await step(page, TICK_RATE * 90);
-    const army = await page.evaluate(
-      () =>
-        window.__game
-          ?.state()
-          .entities.filter(
-            (e) => e.owner === 0 && ['spearman', 'manatarms', 'archer', 'knight'].includes(e.def),
-          ).length ?? 0,
-    );
-    expect(army, 'no soldier was ever trained').toBeGreaterThan(0);
+    const armyReport = await page.evaluate(() => {
+      const api = window.__game;
+      if (!api) return { army: 0, why: 'no api' };
+      const snapshot = api.state();
+      const army = snapshot.entities.filter(
+        (e) => e.owner === 0 && ['spearman', 'manatarms', 'archer', 'knight'].includes(e.def),
+      ).length;
+      const barracks = snapshot.entities.filter((e) => e.def === 'barracks' && e.owner === 0);
+      const queues = snapshot.globalQueue.filter((q) => q.owner === 0);
+      const player = snapshot.players[0];
+      const trained = Number(
+        (player?.stats as { unitsTrained?: number } | undefined)?.unitsTrained ?? 0,
+      );
+      return {
+        army,
+        trained,
+        why: `barracks=${barracks.length} queue=${queues.length} pop=${player?.pop}/${player?.popCap} unitsTrained=${trained} food=${player?.resources.food} wood=${player?.resources.wood}`,
+      };
+    });
+    // Either the soldier is alive, or the barracks produced one that has since
+    // died: unitsTrained is a lifetime counter and proves the production loop ran.
+    expect(
+      armyReport.army + (armyReport.trained ?? 0),
+      `no soldier was ever trained: ${armyReport.why}`,
+    ).toBeGreaterThan(0);
 
     /* ---------------------------------------------------------------- *
      * 7. Combat with counters

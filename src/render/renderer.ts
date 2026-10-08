@@ -208,10 +208,39 @@ class RtsCamera implements CameraController {
     }
   }
 
+  /**
+   * Fraction of the ground the camera currently sees that lies inside the map,
+   * 0..1. This is the metric behind "the viewport is mostly black at match
+   * start": a base placed near the map border shows a large share of empty
+   * space. Rotation is ignored, which only makes the estimate conservative.
+   */
+  groundCoverage(): number {
+    if (this.boundsWidth <= 0 || this.boundsHeight <= 0 || this.viewportHeight <= 0) return 0;
+    const halfFov = (CAMERA_FOV * Math.PI) / 360;
+    const halfHeight =
+      (this.distanceValue * Math.tan(halfFov)) / Math.max(0.4, Math.sin(CAMERA_PITCH));
+    const aspect = this.viewportWidth / this.viewportHeight;
+    const halfWidth = halfHeight * aspect;
+    const x0 = this.focusX - halfWidth;
+    const x1 = this.focusX + halfWidth;
+    const y0 = this.focusY - halfHeight;
+    const y1 = this.focusY + halfHeight;
+    const visible = (x1 - x0) * (y1 - y0);
+    if (visible <= 0) return 0;
+    const insideX = Math.max(0, Math.min(x1, this.boundsWidth) - Math.max(x0, 0));
+    const insideY = Math.max(0, Math.min(y1, this.boundsHeight) - Math.max(y0, 0));
+    return Math.max(0, Math.min(1, (insideX * insideY) / visible));
+  }
+
   private clampFocus(): void {
     if (this.boundsWidth <= 0 || this.boundsHeight <= 0) return;
-    this.focusX = Math.min(this.boundsWidth, Math.max(0, this.focusX));
-    this.focusY = Math.min(this.boundsHeight, Math.max(0, this.focusY));
+    // Keep a margin so the camera cannot sit exactly on the map border, where
+    // half the screen is empty space and the viewport reads as black. The margin
+    // is a fraction of the map so it scales with map size.
+    const marginX = Math.max(4, Math.round(this.boundsWidth * 0.08));
+    const marginY = Math.max(4, Math.round(this.boundsHeight * 0.08));
+    this.focusX = Math.min(this.boundsWidth - marginX, Math.max(marginX, this.focusX));
+    this.focusY = Math.min(this.boundsHeight - marginY, Math.max(marginY, this.focusY));
   }
 
   private apply(): void {
@@ -1295,6 +1324,11 @@ class AegisRenderer implements Renderer {
 
   stats(): { drawCalls: number; instances: number; fps: number } {
     return { drawCalls: this.drawCalls, instances: this.instanceCount, fps: this.fps };
+  }
+
+  /** Fraction of the visible ground that is inside the map; see RtsCamera. */
+  groundCoverage(): number {
+    return this.camera.groundCoverage();
   }
 
   resize(width: number, height: number): void {

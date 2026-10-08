@@ -244,7 +244,19 @@ export function generateMap(opts: MapGenOptions): GeneratedMap {
   // pick the set that maximises the distance between bases.
   const count = clamp(opts.playerCount, 1, MAX_PLAYERS);
   const starts: GridPoint[] = [];
-  const candidates = collectLandCandidates(passable, width, height, landRadius);
+  // Keep every base well inside the map: a start 10 tiles from the edge puts
+  // most of the opening camera view off-map, which reads as a black screen with
+  // a strip of terrain. The margin scales with the map so the view around a base
+  // is always filled with land.
+  const edgeMargin = Math.max(14, Math.round(width * 0.15));
+  let candidates = collectLandCandidates(passable, width, height, landRadius, 0.62, edgeMargin);
+  if (candidates.length < count) {
+    // Tight map: relax the centre distance before relaxing the edge margin.
+    candidates = collectLandCandidates(passable, width, height, landRadius, 0.8, edgeMargin);
+  }
+  if (candidates.length < count) {
+    candidates = collectLandCandidates(passable, width, height, landRadius, 0.95, Math.round(width * 0.1));
+  }
   if (candidates.length === 0) {
     // Degenerate map: fall back to the centre.
     starts.push({ x: cx, y: cy });
@@ -521,14 +533,17 @@ function collectLandCandidates(
   width: number,
   height: number,
   landRadius: number,
+  maxCentreDistance = 0.62,
+  minEdgeMargin = 0,
 ): GridPoint[] {
   const out: GridPoint[] = [];
   const step = 3;
   const cx = width >> 1;
   const cy = height >> 1;
-  const maxDist = Math.trunc(landRadius * 0.95);
-  for (let y = 4; y < height - 4; y += step) {
-    for (let x = 4; x < width - 4; x += step) {
+  const maxDist = Math.trunc(landRadius * maxCentreDistance);
+  const margin = Math.max(minEdgeMargin, 4);
+  for (let y = margin; y < height - margin; y += step) {
+    for (let x = margin; x < width - margin; x += step) {
       const dx = x - cx;
       const dy = y - cy;
       if (dx * dx + dy * dy > maxDist * maxDist) continue;
