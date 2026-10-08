@@ -23,6 +23,7 @@ import { createRenderer } from '../render/renderer';
 import { createHud } from '../ui/hud';
 import type { CommandButton, Hud, HudModel, HudCallbacks, LobbySettings, ObjectiveRow, ScoreRow } from '../ui/types';
 import { InputController } from './input';
+import { AudioEngine } from '../audio/audio';
 
 /** Starting resource presets offered in the lobby. */
 const STARTING_RESOURCES: Record<LobbySettings['startingResources'], { food: number; wood: number; gold: number; stone: number }> = {
@@ -45,6 +46,7 @@ export class GameSession {
   readonly hud: Hud;
   readonly bots: BotController[] = [];
   readonly input: InputController;
+  readonly audio: AudioEngine;
 
   selection: number[] = [];
   controlGroups: number[][] = Array.from({ length: 10 }, () => []);
@@ -56,6 +58,12 @@ export class GameSession {
   private accumulator = 0;
   /** Simulation speed multiplier, 1 == real time. */
   private speed = 1;
+  /**
+   * When paused, the render loop keeps drawing but the simulation only advances
+   * through explicit fastForward() calls. This is what makes the acceptance
+   * tests exact: otherwise real time races the explicit stepping.
+   */
+  private paused = false;
   private fps = 0;
   private frameTimes: number[] = [];
   private elapsedTicks = 0;
@@ -115,12 +123,15 @@ export class GameSession {
     this.hud.setWorldSize(this.game.world.map.width, this.game.world.map.height);
 
     this.input = new InputController(services.canvas, this);
+    this.audio = new AudioEngine({ enabled: s.audioEnabled !== false, volume: 0.35 });
 
     if (!this.game.config.disableBots) {
       for (const player of this.game.world.players) {
         if (player.bot >= 0) this.bots.push(new BotController(this.game, player.id, player.bot));
       }
     }
+
+    if (s.startPaused) this.paused = true;
 
     this.lastSnapshot = this.game.snapshot();
   }
@@ -151,6 +162,7 @@ export class GameSession {
     this.stop();
     this.input.dispose();
     this.renderer.dispose();
+    this.audio.dispose();
     this.hud.dispose();
   }
 
@@ -164,16 +176,21 @@ export class GameSession {
     const avg = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
     this.fps = avg > 0 ? Math.round(1000 / avg) : 0;
 
-    this.accumulator += dt * this.speed;
-    const stepMs = 1000 / TICK_RATE;
-    let steps = 0;
-    // Cap the catch-up work so a stalled tab cannot freeze the browser.
-    while (this.accumulator >= stepMs && steps < 8) {
-      this.stepOnce();
-      this.accumulator -= stepMs;
-      steps++;
+    if (this.paused) {
+      this.accumulator = 0;
+    } else {
+      this.accumulator += dt * this.speed;
+      const stepMs = 1000 / TICK_RATE;
+      let steps = 0;
+      // Cap the catch-up work so a stalled tab cannot freeze the browser.
+      while (this.accumulator >= stepMs && steps < 8) {
+        this.stepOnce();
+        this.accumulator -= stepMs;
+        steps++;
+      }
+      if (steps >= 8) this.accumulator = 0;
     }
-    if (steps >= 8) this.accumulator = 0;
+    const stepMs = 1000 / TICK_RATE;
 
     const alpha = Math.min(1, this.accumulator / stepMs);
     this.renderer.setInterpolation(alpha);
@@ -207,6 +224,7 @@ export class GameSession {
     }
     this.renderer.sync(snapshot, this.selection, this.hovered);
     this.renderer.draw();
+    this.audio.update(snapshot, 0);
     this.hud.update(this.buildModel(snapshot));
   }
 
@@ -749,6 +767,22 @@ export class GameSession {
     return this.fps;
   }
 
+  /** Stop the real-time loop from advancing the simulation. */
+  pause(): void {
+    this.paused = true;
+    this.accumulator = 0;
+  }
+
+  /** Resume normal real-time simulation. */
+  resume(): void {
+    this.paused = false;
+    this.lastTime = performance.now();
+  }
+
+  isPaused(): boolean {
+    return this.paused;
+  }
+
   setSpeed(multiplier: number): void {
     this.speed = Math.max(0.25, Math.min(8, multiplier));
   }
@@ -773,6 +807,11 @@ export class GameSession {
 
   toast(message: string): void {
     this.hud.toast(message);
+  }
+
+  /** Enable or mute procedural audio. */
+  setAudioEnabled(enabled: boolean): void {
+    this.audio.setEnabled(enabled);
   }
 
   setHovered(id: number): void {

@@ -192,12 +192,15 @@ export interface ReturnCargoCommand extends BaseCommand {
 
 export interface CheatCommand extends BaseCommand {
   type: CommandType.Cheat;
-  kind: 'resources' | 'reveal' | 'spawn';
+  kind: 'resources' | 'reveal' | 'spawn' | 'building';
   amount?: number;
   defId?: string;
   count?: number;
   x?: number;
   y?: number;
+  /** Tile position, used by the 'building' cheat. */
+  tileX?: number;
+  tileY?: number;
 }
 
 export type Command =

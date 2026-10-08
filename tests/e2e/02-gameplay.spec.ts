@@ -40,12 +40,15 @@ test.describe('world and camera', () => {
   test('is deterministic for a given seed, in the browser', async ({ page }) => {
     const watch = watchConsole(page);
     await loadShell(page);
+    // startMatch creates the session paused, so every run reaches the exact
+    // same tick count.
 
     const hashFor = async (seed: number): Promise<number> => {
       await startMatch(page, { seed });
       await step(page, 200);
       return (await page.evaluate(() => window.__game?.hash())) ?? 0;
     };
+    // startMatch pauses the loop, so the tick count is exactly 200 each time.
 
     const first = await hashFor(555);
     const second = await hashFor(555);
@@ -65,18 +68,23 @@ test.describe('world and camera', () => {
     const after = await page.evaluate(() => window.__game?.camera.focus());
     expect(after?.x).not.toBe(before?.x);
 
+    // zoomBy takes a zoom-level multiplier: above 1 moves closer.
     const d0 = await page.evaluate(() => window.__game?.camera.distance());
-    await page.evaluate(() => window.__game?.camera.zoom(0.5));
+    await page.evaluate(() => window.__game?.camera.zoom(1.5));
     const d1 = await page.evaluate(() => window.__game?.camera.distance());
-    expect(d1).toBeLessThan(d0 ?? 0);
+    expect(d1, 'zooming in must reduce the camera distance').toBeLessThan(d0 ?? 0);
+    await page.evaluate(() => window.__game?.camera.zoom(0.5));
+    const d2 = await page.evaluate(() => window.__game?.camera.distance());
+    expect(d2, 'zooming out must increase the camera distance').toBeGreaterThan(d1 ?? 0);
 
-    // Zoom clamps: repeated zoom-out must stop at the maximum distance.
-    for (let i = 0; i < 12; i++) await page.evaluate(() => window.__game?.camera.zoom(1.2));
-    const far = await page.evaluate(() => window.__game?.camera.distance());
-    for (let i = 0; i < 20; i++) await page.evaluate(() => window.__game?.camera.zoom(0.8));
+    // Clamps: the distance must stay inside the documented 20..70 range.
+    for (let i = 0; i < 25; i++) await page.evaluate(() => window.__game?.camera.zoom(1.2));
     const near = await page.evaluate(() => window.__game?.camera.distance());
+    for (let i = 0; i < 30; i++) await page.evaluate(() => window.__game?.camera.zoom(0.8));
+    const far = await page.evaluate(() => window.__game?.camera.distance());
+    expect(near).toBeGreaterThanOrEqual(19);
     expect(near).toBeLessThan(far ?? 0);
-    expect(near).toBeGreaterThan(0);
+    expect(far).toBeLessThanOrEqual(71);
 
     await page.evaluate(() => window.__game?.camera.rotate(1));
     expectNoErrors(watch);
@@ -134,7 +142,7 @@ test.describe('economy and construction', () => {
             [0, r],
             [0, -r],
           ]) {
-            const ok = window.__game?.command({
+            const ok = window.__game?.apply({
               type: 5,
               player: 0,
               units: [id],
@@ -152,9 +160,11 @@ test.describe('economy and construction', () => {
     );
     expect(placed, 'the house could not be placed anywhere near the villager').toBe(true);
 
-    await step(page, TICK_RATE * 30);
+    // A house takes 15 s to build once the villager arrives, and the villager
+    // may have to walk several tiles first.
+    await step(page, TICK_RATE * 90);
     const capAfter = await page.evaluate(() => window.__game?.state().players[0]?.popCap ?? 0);
-    expect(capAfter).toBeGreaterThan(capBefore);
+    expect(capAfter, 'the house never finished').toBeGreaterThan(capBefore);
     expectNoErrors(watch);
   });
 
@@ -209,7 +219,7 @@ test.describe('economy and construction', () => {
             [0, r],
             [0, -r],
           ]) {
-            const ok = window.__game?.command({
+            const ok = window.__game?.apply({
               type: 5,
               player: 0,
               units,
@@ -226,9 +236,10 @@ test.describe('economy and construction', () => {
     });
     expect(built, 'no landmark could be placed').toBe(true);
 
-    await step(page, TICK_RATE * 60);
+    // Feudal Age landmarks have a 190 s base build time in the SPEC.
+    await step(page, TICK_RATE * 260);
     const age = (await state(page))?.players[0]?.age ?? 0;
-    expect(age).toBeGreaterThanOrEqual(1);
+    expect(age, 'the landmark never completed').toBeGreaterThanOrEqual(1);
     expectNoErrors(watch);
   });
 });
@@ -260,7 +271,8 @@ test.describe('combat', () => {
         s?.entities.filter((e) => e.def === def && e.owner === owner).length ?? 0;
       const initial = {
         spearmen: count(before, 'spearman', 0),
-        knightsVsSpears: count(before, 'knight', 1),
+        archers: count(before, 'archer', 0),
+        knights: count(before, 'knight', 1),
       };
 
       // Order every unit to attack-move into the enemy.
@@ -272,7 +284,7 @@ test.describe('combat', () => {
           api.command({ type: 3, player: 1, units: [e.id], x: e.x - 4 * 1024, y: e.y, queue: false });
         }
       }
-      for (let i = 0; i < 40; i++) api.step(20);
+      for (let i = 0; i < 60; i++) api.step(20);
       const after = api.state();
       return {
         initial,
@@ -283,8 +295,15 @@ test.describe('combat', () => {
     });
 
     expect(outcome).toBeTruthy();
-    // Something must actually have died: combat is happening.
-    expect(outcome?.knightsLeft ?? 0).toBeLessThan(4);
+    // Both duels must produce casualties: spearmen and archers grind down the
+    // knights, and the knights kill something back.
+    const knightsLost = (outcome?.initial.knights ?? 0) - (outcome?.knightsLeft ?? 0);
+    const infantryLost =
+      (outcome?.initial.spearmen ?? 0) +
+      (outcome?.initial.archers ?? 0) -
+      ((outcome?.spearmenLeft ?? 0) + (outcome?.archersLeft ?? 0));
+    expect(knightsLost, 'the knights took no losses at all').toBeGreaterThan(0);
+    expect(infantryLost, 'the infantry took no losses at all').toBeGreaterThan(0);
     expectNoErrors(watch);
   });
 
@@ -293,41 +312,60 @@ test.describe('combat', () => {
     await loadShell(page);
     await startMatch(page, { seed: 82, mapSize: 'small', revealMap: true, startingResources: 'veryhigh' });
 
-    const results = await page.evaluate(() => {
-      const api = window.__game;
-      if (!api) return null;
-      const snapshot = api.state();
-      const tc = snapshot.entities.find((e) => e.def === 'town_center' && e.owner === 0);
-      const villagers = snapshot.entities.filter((e) => e.def === 'villager' && e.owner === 0).map((v) => v.id);
-      if (!tc || villagers.length === 0) return null;
-      const tx = tc.x >> 10;
-      const ty = tc.y >> 10;
-      const out: Record<string, boolean> = {};
-      const place = (defId: string, ox: number, oy: number): boolean =>
-        api.command({
-          type: 5,
-          player: 0,
-          units: villagers,
-          defId,
-          tileX: tx + ox,
-          tileY: ty + oy,
-          queue: false,
-        });
-      out.outpost = place('outpost', 8, 0);
-      out.palisade = place('palisade_wall', 0, 8);
-      out.palisadeGate = place('palisade_gate', 1, 8);
-      out.stoneWall = place('stone_wall', 0, 10);
-      out.stoneGate = place('stone_gate', 1, 10);
-      out.keep = place('keep', -8, 0);
-      return out;
-    });
+    // Place and finish one structure at a time: a single Build command moves
+    // every listed villager, so batching them would leave all but the last
+    // site unattended.
+    const structures: Array<[string, number, number]> = [
+      ['outpost', 8, 0],
+      ['palisade_wall', 0, 8],
+      ['palisade_gate', 1, 8],
+      ['stone_wall', 0, 12],
+      ['stone_gate', 1, 12],
+      ['keep', -9, 0],
+    ];
 
-    expect(results).toBeTruthy();
-    for (const key of ['outpost', 'palisade', 'palisadeGate', 'stoneWall', 'stoneGate', 'keep']) {
-      expect(results?.[key], `could not place ${key}`).toBe(true);
+    for (const [defId, ox, oy] of structures) {
+      const placed = await page.evaluate(
+        ({ id, dx, dy }) => {
+          const api = window.__game;
+          if (!api) return false;
+          const snapshot = api.state();
+          const tc = snapshot.entities.find((e) => e.def === 'town_center' && e.owner === 0);
+          const villagers = snapshot.entities
+            .filter((e) => e.def === 'villager' && e.owner === 0)
+            .map((v) => v.id);
+          if (!tc || villagers.length === 0) return false;
+          return api.apply({
+            type: 5,
+            player: 0,
+            units: villagers,
+            defId: id,
+            tileX: (tc.x >> 10) + dx,
+            tileY: (tc.y >> 10) + dy,
+            queue: false,
+          });
+        },
+        { id: defId, dx: ox, dy: oy },
+      );
+      expect(placed, `could not place ${defId}`).toBe(true);
+
+      // Wait for this structure to finish before starting the next one.
+      await page.evaluate(
+        async ({ id }) => {
+          const api = window.__game;
+          if (!api) return;
+          for (let i = 0; i < 400; i++) {
+            api.step(20);
+            const built = api.state().entities.some(
+              (e) => e.def === id && e.owner === 0 && e.construction >= 1000,
+            );
+            if (built) return;
+          }
+        },
+        { id: defId },
+      );
     }
 
-    await step(page, TICK_RATE * 200);
     const defs = await page.evaluate(() => {
       const snapshot = window.__game?.state();
       return [
@@ -338,7 +376,7 @@ test.describe('combat', () => {
         ),
       ];
     });
-    for (const expected of ['outpost', 'palisade_wall', 'palisade_gate', 'keep', 'stone_wall']) {
+    for (const [expected] of structures) {
       expect(defs, `${expected} never finished building`).toContain(expected);
     }
     expectNoErrors(watch);
@@ -356,15 +394,7 @@ test.describe('relics, sacred sites and trade', () => {
       if (!api) return null;
       const snapshot = api.state();
       const tc = snapshot.entities.find((e) => e.def === 'town_center' && e.owner === 0);
-      const monks = api.command({
-        type: 99,
-        player: 0,
-        kind: 'spawn',
-        defId: 'monk',
-        count: 2,
-        x: (tc?.x ?? 0) + 3 * 1024,
-        y: (tc?.y ?? 0) + 3 * 1024,
-      });
+      const monks = api.spawn('monk', 2, 0, (tc?.x ?? 0) + 3 * 1024, (tc?.y ?? 0) + 3 * 1024);
       const sacred = snapshot.entities.filter((e) => e.kind === 6);
       const relics = snapshot.entities.filter((e) => e.kind === 5);
       return { monks, sacred: sacred.length, relics: relics.length, monkIds: snapshot.entities.filter((e) => e.def === 'monk' && e.owner === 0).map((e) => e.id) };
@@ -377,17 +407,27 @@ test.describe('relics, sacred sites and trade', () => {
     // Walk a monk to the nearest relic and pick it up.
     const picked = await page.evaluate(() => {
       const api = window.__game;
-      if (!api) return false;
+      if (!api) return { ok: false, why: 'no api' };
       const snapshot = api.state();
       const monk = snapshot.entities.find((e) => e.def === 'monk' && e.owner === 0);
       const relic = snapshot.entities.find((e) => e.kind === 5);
-      if (!monk || !relic) return false;
+      if (!monk || !relic) return { ok: false, why: `monk=${!!monk} relic=${!!relic}` };
       api.command({ type: 21, player: 0, units: [monk.id], target: relic.id });
-      for (let i = 0; i < 60; i++) api.step(20);
-      const after = api.state();
-      return after.entities.some((e) => e.def === 'monk' && e.owner === 0 && e.relicHeld > 0);
+      let last = '';
+      for (let i = 0; i < 200; i++) {
+        api.step(20);
+        const m = api.state().entities.find((e) => e.id === monk.id);
+        if (!m) return { ok: false, why: 'monk died' };
+        last = `t=${i * 20} pos=${m.x >> 10},${m.y >> 10} orders=${JSON.stringify(m.orders)} held=${m.relicHeld}`;
+        if (m.relicHeld > 0) return { ok: true, why: last };
+      }
+      const target = api.state().entities.find((e) => e.id === relic.id);
+      return {
+        ok: false,
+        why: `${last} | relic=${target ? `${target.x >> 10},${target.y >> 10}` : 'gone'}`,
+      };
     });
-    expect(picked, 'the monk never picked up the relic').toBe(true);
+    expect(picked.ok, `the monk never picked up the relic: ${picked.why}`).toBe(true);
     expectNoErrors(watch);
   });
 
@@ -401,15 +441,7 @@ test.describe('relics, sacred sites and trade', () => {
       if (!api) return null;
       const snapshot = api.state();
       const tc = snapshot.entities.find((e) => e.def === 'town_center' && e.owner === 0);
-      const ok = api.command({
-        type: 99,
-        player: 0,
-        kind: 'spawn',
-        defId: 'trader',
-        count: 1,
-        x: (tc?.x ?? 0) + 2 * 1024,
-        y: (tc?.y ?? 0) + 2 * 1024,
-      });
+      const ok = api.spawn('trader', 1, 0, (tc?.x ?? 0) + 2 * 1024, (tc?.y ?? 0) + 2 * 1024);
       return { ok, traders: api.state().entities.filter((e) => e.def === 'trader' && e.owner === 0).length };
     });
     expect(traded?.ok).toBe(true);
@@ -443,6 +475,56 @@ test.describe('relics, sacred sites and trade', () => {
   });
 });
 
+test.describe('mouse input on the battlefield', () => {
+  test('clicking a unit selects it and right-clicking issues an order', async ({ page }) => {
+    const watch = watchConsole(page);
+    await loadShell(page);
+    await startMatch(page, { seed: 88, mapSize: 'small', revealMap: true });
+
+    // Point the camera at the Town Center so the starting units are on screen.
+    const target = await page.evaluate(() => {
+      const api = window.__game;
+      const tc = api?.state().entities.find((e) => e.def === 'town_center' && e.owner === 0);
+      if (!tc) return null;
+      api?.camera.center(tc.x, tc.y);
+      api?.camera.zoom(0.7);
+      return { x: tc.x, y: tc.y };
+    });
+    expect(target).toBeTruthy();
+    await page.waitForTimeout(400);
+
+    // Click every candidate position until a unit gets selected: the exact
+    // screen projection depends on the camera, so probe a small grid.
+    let selected = 0;
+    const viewport = page.viewportSize() ?? { width: 1280, height: 720 };
+    for (let gy = 0.3; gy <= 0.7 && selected === 0; gy += 0.05) {
+      for (let gx = 0.25; gx <= 0.75 && selected === 0; gx += 0.05) {
+        await page.mouse.click(viewport.width * gx, viewport.height * gy);
+        selected = await page.evaluate(() => window.__game?.selection().length ?? 0);
+      }
+    }
+    expect(selected, 'no battlefield click selected anything: the canvas is blocked').toBeGreaterThan(0);
+
+    // Right click on open ground must reach the simulation as a move order.
+    const before = await page.evaluate(() => {
+      const api = window.__game;
+      const id = api?.selection()[0];
+      return id ?? 0;
+    });
+    expect(before).toBeGreaterThan(0);
+    await page.mouse.click(viewport.width * 0.5, viewport.height * 0.45, { button: 'right' });
+    await page.evaluate(() => window.__game?.step(4));
+    const ordered = await page.evaluate(() => {
+      const api = window.__game;
+      const id = api?.selection()[0];
+      const e = api?.state().entities.find((x) => x.id === id);
+      return e ? e.orders.length + (e.hasGoal ? 1 : 0) : 0;
+    });
+    expect(ordered, 'the right click produced no order').toBeGreaterThan(0);
+    expectNoErrors(watch);
+  });
+});
+
 test.describe('HUD', () => {
   test('shows the AoE IV panels: resources, villagers per resource, age, minimap, queues', async ({
     page,
@@ -454,12 +536,17 @@ test.describe('HUD', () => {
     const hud = page.locator('#hud-root');
     await expect(hud).toBeVisible();
 
-    // Resource bar with the four resources.
-    for (const label of ['Food', 'Wood', 'Gold', 'Stone']) {
-      await expect(hud.getByText(label, { exact: false }).first()).toBeVisible();
+    // Resource bar: the AoE IV bar is icon + number, so assert on the labels
+    // the HUD exposes for accessibility, plus the villager readout inside them.
+    for (const resource of ['food', 'wood', 'gold', 'stone']) {
+      const cell = hud.locator(`[data-resource="${resource}"]`).first();
+      await expect(cell, `${resource} cell missing`).toBeAttached();
+      const aria = (await cell.getAttribute('aria-label')) ?? '';
+      expect(aria, `${resource} has no numeric readout`).toMatch(new RegExp(`${resource}\\s+\\d+`, 'i'));
+      expect(aria, `${resource} has no villager count`).toMatch(/villagers gathering/i);
     }
-    // Population and age indicator.
-    await expect(hud.getByText(/\/\s*200|pop/i).first()).toBeVisible();
+    // Population readout ("7/10" at the start, capped at 200 later) and age.
+    await expect(hud.getByText(/^\d+\s*\/\s*\d+$/).first()).toBeVisible();
     await expect(hud.getByText(/Dark Age/i).first()).toBeVisible();
     // Idle villager and select-all-military buttons.
     await expect(hud.getByRole('button', { name: /idle/i })).toBeVisible();
@@ -488,20 +575,22 @@ test.describe('HUD', () => {
     await startMatch(page, { seed: 86, mapSize: 'small', revealMap: true });
 
     // Select the Town Center through the API, then click its train button.
-    await page.evaluate(() => {
+    const tcId = await page.evaluate(() => {
       const api = window.__game;
       const tc = api?.state().entities.find((e) => e.def === 'town_center' && e.owner === 0);
-      if (tc) api?.select([tc.id]);
+      if (!tc) return 0;
+      api?.select([tc.id]);
+      api?.step(2);
+      return tc.id;
     });
-    await page.evaluate(() => window.__game?.step(2));
+    expect(tcId).toBeGreaterThan(0);
 
-    const button = page.locator('#hud-root button', { hasText: /Villager/i }).first();
+    const button = page.locator(`#hud-root .aoe-cmd[data-cmd="train:villager:${tcId}"]`).first();
     await expect(button).toBeVisible();
-    const queuedBefore = (await state(page))?.productionQueues.length ?? 0;
     await button.click();
-    await page.evaluate(() => window.__game?.step(2));
-    const queuedAfter = (await state(page))?.globalQueue.length ?? 0;
-    expect(queuedAfter + queuedBefore).toBeGreaterThan(0);
+    await page.evaluate(() => window.__game?.step(4));
+    const queued = (await state(page))?.globalQueue.length ?? 0;
+    expect(queued, 'clicking the command card did not queue a villager').toBeGreaterThan(0);
     expectNoErrors(watch);
   });
 

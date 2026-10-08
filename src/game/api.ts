@@ -30,6 +30,15 @@ export interface GameApi {
   step(ticks: number): void;
   /** Simulation speed multiplier. */
   speed(multiplier: number): void;
+  /**
+   * Stop the real-time loop from advancing the simulation. Rendering, audio and
+   * the HUD keep running. Pair with step() for exact, reproducible runs.
+   */
+  pause(): void;
+  /** Resume real-time simulation. */
+  resume(): void;
+  /** True while the simulation is paused. */
+  paused(): boolean;
   /** Smoothed frames per second as measured by the render loop. */
   fps(): number;
   /** Renderer counters: draw calls, live instances and the renderer's own fps. */
@@ -56,6 +65,8 @@ export interface GameApi {
   spawn(defId: string, count: number, player?: number, x?: number, y?: number): boolean;
   /** Give resources to a player (test helper). */
   grant(amount: number, player?: number): boolean;
+  /** Place a finished building (test helper for wonder and sacred-site runs). */
+  placeBuilding(defId: string, tileX: number, tileY: number, player?: number): boolean;
 }
 
 declare global {
@@ -109,6 +120,12 @@ export function installGameApi(hooks: ApiHooks): GameApi {
 
     speed: (multiplier) => requireSession()?.setSpeed(multiplier),
 
+    pause: () => requireSession()?.pause(),
+
+    resume: () => requireSession()?.resume(),
+
+    paused: () => requireSession()?.isPaused() ?? false,
+
     fps: () => requireSession()?.currentFps() ?? 0,
 
     renderStats: () =>
@@ -160,6 +177,16 @@ export function installGameApi(hooks: ApiHooks): GameApi {
 
     grant: (amount, player = 0) =>
       requireSession()?.applyNow({ type: 99, player, kind: 'resources', amount }) ?? false,
+
+    placeBuilding: (defId, tileX, tileY, player = 0) =>
+      requireSession()?.applyNow({
+        type: 99,
+        player,
+        kind: 'building',
+        defId,
+        tileX,
+        tileY,
+      }) ?? false,
   };
 
   window.__game = api;

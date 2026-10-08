@@ -32,6 +32,12 @@ body {
   outline: none;
 }
 
+/*
+ * The HUD never captures the whole screen: it is a transparent overlay whose
+ * panels opt into pointer events themselves (.aoe-panel in hud.css). A blanket
+ * `#hud-root > * { pointer-events: auto }` here used to override that and made
+ * the battlefield unclickable.
+ */
 #hud-root {
   position: absolute;
   inset: 0;
@@ -39,14 +45,21 @@ body {
   z-index: 10;
 }
 
-#hud-root > * {
-  pointer-events: auto;
-}
-
+/*
+ * The menu root spans the viewport so the lobby can centre itself, but it must
+ * not swallow mouse input once a match starts: with `pointer-events: auto` it
+ * sat above the canvas and silently blocked every click on the battlefield.
+ * Only its rendered child is interactive.
+ */
 #menu-root {
   position: absolute;
   inset: 0;
   z-index: 20;
+  pointer-events: none;
+}
+
+#menu-root > * {
+  pointer-events: auto;
 }
 
 .hidden {

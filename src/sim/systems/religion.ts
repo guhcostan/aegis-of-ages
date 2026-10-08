@@ -37,6 +37,35 @@ function monkSystem(world: World): void {
     const order = m.orders[0];
     if (!order) continue;
 
+    if (order.kind === OrderKind.PickupRelic) {
+      const relic = world.get(order.target);
+      if (!relic || relic.kind !== EntityKind.Relic) {
+        // Someone else took it, or it is gone: look for another one.
+        const next = findNearestRelic(world, m);
+        if (next) {
+          order.target = next.id;
+          order.x = next.x;
+          order.y = next.y;
+          setDestination(world, m, next.x, next.y, true);
+        } else {
+          m.orders.length = 0;
+        }
+        continue;
+      }
+      if (fpDist(m.x, m.y, relic.x, relic.y) > REACH) {
+        if (!m.hasGoal) setDestination(world, m, relic.x, relic.y, true);
+        continue;
+      }
+      m.hasGoal = false;
+      if (m.relicHeld > 0) {
+        m.orders.length = 0;
+        continue;
+      }
+      pickupRelic(world, m.id, relic.id);
+      m.orders.length = 0;
+      continue;
+    }
+
     if (order.kind === OrderKind.Heal) {
       const target = world.get(order.target);
       if (!target || target.hp >= target.maxHp) {
@@ -95,6 +124,22 @@ function monkSystem(world: World): void {
 
 function inRange(a: Entity, b: Entity): boolean {
   return fpDist(a.x, a.y, b.x, b.y) <= REACH;
+}
+
+/** Nearest relic on the map, for monks that have no assigned one. */
+function findNearestRelic(world: World, m: Entity): Entity | null {
+  let best: Entity | null = null;
+  let bestD = Number.MAX_SAFE_INTEGER;
+  for (let i = 0; i < world.entities.length; i++) {
+    const e = world.entities[i];
+    if (!e || !e.alive || e.kind !== EntityKind.Relic) continue;
+    const d = fpDist(m.x, m.y, e.x, e.y);
+    if (d < bestD) {
+      bestD = d;
+      best = e;
+    }
+  }
+  return best;
 }
 
 function findWounded(world: World, m: Entity): Entity | null {

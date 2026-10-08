@@ -1012,6 +1012,13 @@ function syncResources(dom: HudDom, model: HudModel): void {
     setText(cell.workers, String(villagers[key]));
     setClass(cell.root, 'is-empty', villagers[key] === 0);
     cell.root.title = `${RESOURCE_LABELS[key]}: ${resources[key]} — ${villagers[key]} villagers gathering`;
+  // The AoE IV resource bar is icon + number only; expose the meaning for
+  // screen readers and for the automated UI checks.
+  cell.root.setAttribute(
+    'aria-label',
+    `${RESOURCE_LABELS[key]} ${resources[key]}, ${villagers[key]} villagers gathering`,
+  );
+  cell.root.dataset.resource = key;
   }
   setText(dom.pop, `${pop}/${popCap}`);
   setClass(dom.pop, 'is-capped', popCap > 0 && pop >= popCap);

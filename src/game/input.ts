@@ -31,6 +31,8 @@ export class InputController {
   private lastClickTarget = 0;
   private pointerX = 0;
   private pointerY = 0;
+  /** True only while the pointer is genuinely over the canvas. */
+  private pointerOverCanvas = false;
   private edgePanTimer = 0;
   private disposers: Array<() => void> = [];
 
@@ -84,6 +86,13 @@ export class InputController {
     on(window, 'keydown', (ev) => this.onKeyDown(ev as KeyboardEvent));
     on(window, 'keyup', (ev) => this.onKeyUp(ev as KeyboardEvent));
     on(window, 'blur', () => this.keys.clear());
+    on(this.canvas, 'mouseenter', () => {
+      this.pointerOverCanvas = true;
+    });
+    on(this.canvas, 'mouseleave', () => {
+      this.pointerOverCanvas = false;
+      this.middleDragging = false;
+    });
 
     // Edge panning runs on its own slow timer: it is a camera action, not a
     // simulation action, so it does not need frame-rate precision.
@@ -219,7 +228,9 @@ export class InputController {
 
   private onWheel(ev: WheelEvent): void {
     ev.preventDefault();
-    const factor = ev.deltaY > 0 ? 1.12 : 1 / 1.12;
+    // CameraController.zoomBy takes a zoom-level multiplier: > 1 moves the
+    // camera closer. Scrolling down must therefore zoom OUT.
+    const factor = ev.deltaY > 0 ? 1 / 1.12 : 1.12;
     this.session.renderer.camera.zoomBy(factor);
   }
 
@@ -281,8 +292,10 @@ export class InputController {
     if (this.keys.has('w') || this.keys.has('arrowup')) dy += step;
     if (this.keys.has('s') || this.keys.has('arrowdown')) dy -= step;
 
-    // Edge scrolling, only while the pointer is over the canvas.
-    if (this.pointerX >= 0 && this.pointerX <= rect.width && this.pointerY >= 0 && this.pointerY <= rect.height) {
+    // Edge scrolling only while the pointer is really over the canvas: before
+    // the first mouse move the tracked position is (0,0), which would otherwise
+    // read as "top-left edge" and drag the camera away on its own.
+    if (this.pointerOverCanvas) {
       if (this.pointerX < EDGE_PAN_MARGIN) dx += step;
       if (this.pointerX > rect.width - EDGE_PAN_MARGIN) dx -= step;
       if (this.pointerY < EDGE_PAN_MARGIN) dy += step;

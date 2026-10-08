@@ -41,6 +41,12 @@
   display: none !important;
 }
 
+/* `menu.hidden = true` is set on the root element itself, which the descendant
+   rule above does not match. */
+.aoe-menu[hidden] {
+  display: none !important;
+}
+
 .aoe-screen {
   position: absolute;
   inset: 0;

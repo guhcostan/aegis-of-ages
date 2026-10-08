@@ -272,7 +272,8 @@ export class Game {
             issued: w.tick,
             aux: 0,
           });
-          setDestination(w, e, gx, gy, false);
+          // Do not clear the queue here: the Move order was just installed.
+          setDestination(w, e, gx, gy, true);
           e.attackTarget = 0;
         }
         return targets.length > 0;
@@ -310,7 +311,7 @@ export class Game {
             aux: 0,
           });
           e.attackTarget = 0;
-          setDestination(w, e, command.x, command.y, false);
+          setDestination(w, e, command.x, command.y, true);
         }
         return targets.length > 0;
       }
@@ -490,7 +491,7 @@ export class Game {
             issued: w.tick,
             aux: 0,
           });
-          setDestination(w, e, command.x, command.y, false);
+          setDestination(w, e, command.x, command.y, true);
         }
         return true;
       }
@@ -513,7 +514,7 @@ export class Game {
               issued: w.tick,
               aux: 0,
             });
-            setDestination(w, m, relic.x, relic.y, false);
+            setDestination(w, m, relic.x, relic.y, true);
             ok = true;
           } else {
             ok = pickupRelic(w, m.id, relic.id) || ok;
@@ -547,6 +548,24 @@ export class Game {
         if (command.kind === 'reveal') {
           this.config.revealMap = true;
           for (const fog of this.fogs) fog.explored.fill(1);
+          return true;
+        }
+        if (command.kind === 'building' && command.defId) {
+          // Place a finished building at an explicit tile. Used by the
+          // acceptance tests to set up wonder and sacred-site scenarios.
+          const def = BUILDINGS[command.defId];
+          if (!def) return false;
+          const tileX = command.tileX ?? command.x ?? 0;
+          const tileY = command.tileY ?? command.y ?? 0;
+          const building = w.spawnBuilding({
+            owner: command.player,
+            defId: command.defId,
+            tileX,
+            tileY,
+            construction: 1000,
+          });
+          void building;
+          for (const p of w.players) w.recomputePopulation(p);
           return true;
         }
         if (command.kind === 'spawn' && command.defId) {

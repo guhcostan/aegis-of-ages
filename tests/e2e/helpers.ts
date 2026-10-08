@@ -46,17 +46,37 @@ export interface LobbyOverrides {
   playerBotDifficulty?: 0 | 1 | 2;
 }
 
-/** Start a match programmatically and wait for the simulation to be live. */
-export async function startMatch(page: Page, overrides: LobbyOverrides = {}): Promise<void> {
-  await page.evaluate((o) => {
-    window.__aegis?.startMatch(o as never);
-  }, overrides);
+/**
+ * Start a match programmatically and wait for the simulation to be live.
+ *
+ * The match starts PAUSED by default: the render loop keeps drawing, but the
+ * simulation only advances through explicit step() calls. Without this, real
+ * time races the explicit stepping and tick-accurate assertions (determinism,
+ * gathered amounts) become flaky. Pass `{ resume: true }` for tests that need
+ * the live game loop.
+ */
+export async function startMatch(
+  page: Page,
+  overrides: LobbyOverrides = {},
+  options: { resume?: boolean } = {},
+): Promise<void> {
+  await page.evaluate(
+    ({ o, resume }) => {
+      window.__aegis?.startMatch({ ...(o as Record<string, unknown>), startPaused: !resume } as never);
+    },
+    { o: overrides, resume: options.resume === true },
+  );
   await page.waitForFunction(() => window.__game?.ready() === true, null, { timeout: 30_000 });
+  if (!options.resume) {
+    await page.evaluate(() => window.__game?.pause());
+  }
 }
 
-/** Advance the simulation by n ticks, waiting for the page to catch up. */
+/** Advance the simulation by exactly n ticks. */
 export async function step(page: Page, ticks: number): Promise<void> {
   await page.evaluate((n) => window.__game?.step(n), ticks);
+  // Let the render/hud catch up with the new state.
+  await page.waitForTimeout(60);
 }
 
 /** Read the current state snapshot. */

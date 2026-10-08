@@ -135,6 +135,14 @@ export interface LobbySettings {
   playerAsBot?: boolean;
   /** Bot profile used for the local player when `playerAsBot` is set. */
   playerBotDifficulty?: 0 | 1 | 2;
+  /** Procedural audio on or off; the acceptance tests start muted. */
+  audioEnabled?: boolean;
+  /**
+   * Create the session already paused: the render loop runs but the simulation
+   * only advances through explicit step() calls. Used by the acceptance tests
+   * for tick-exact assertions.
+   */
+  startPaused?: boolean;
 }
 
 export interface Menu {
