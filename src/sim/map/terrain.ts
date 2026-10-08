@@ -236,21 +236,73 @@ export function generateMap(opts: MapGenOptions): GeneratedMap {
     }
   }
 
-  // --- Starting positions on a ring, evenly spaced. ---
-  const starts: GridPoint[] = [];
+  // --- Starting positions ---
+  // A fixed ring does not work: on most seeds the ideal ring radius lands in
+  // water or on rock, and snapping each point to the nearest land tile clusters
+  // every base near the centre (measured: two Town Centers 14-22 tiles apart,
+  // which decides the game at t=0). Instead we sample the real land tiles and
+  // pick the set that maximises the distance between bases.
   const count = clamp(opts.playerCount, 1, MAX_PLAYERS);
-  const ringRadius = Math.trunc(landRadius * 0.62);
-  for (let p = 0; p < count; p++) {
-    // Angles snapped to integer steps; no transcendental math needed for the
-    // final position because we use a fixed 16-entry direction table.
-    const angleStep = Math.trunc((p * 256) / count);
-    let sx = cx + Math.trunc((ringRadius * cosTable(angleStep)) / 1024);
-    let sy = cy + Math.trunc((ringRadius * sinTable(angleStep)) / 1024);
-    // Nudge onto the nearest passable land tile.
-    const spot = findNearestClear(passable, width, height, sx, sy, 26);
-    sx = spot.x;
-    sy = spot.y;
-    starts.push({ x: sx, y: sy });
+  const starts: GridPoint[] = [];
+  const candidates = collectLandCandidates(passable, width, height, landRadius);
+  if (candidates.length === 0) {
+    // Degenerate map: fall back to the centre.
+    starts.push({ x: cx, y: cy });
+  } else {
+    // Seed the first base on the ring angle nearest the map edge so bases end
+    // up spread around the landmass rather than all on one side.
+    for (let p = 0; p < count; p++) {
+      const angleStep = Math.trunc((p * 256) / count);
+      const idealX = cx + Math.trunc((landRadius * 0.55 * cosTable(angleStep)) / 1024);
+      const idealY = cy + Math.trunc((landRadius * 0.55 * sinTable(angleStep)) / 1024);
+      let best = candidates[0] as GridPoint;
+      let bestD = Number.MAX_SAFE_INTEGER;
+      for (const c of candidates) {
+        const dx = c.x - idealX;
+        const dy = c.y - idealY;
+        const d = dx * dx + dy * dy;
+        // Keep the farthest-point rule from reusing a tile already taken.
+        const tooClose = starts.some(
+          (s) => Math.abs(s.x - c.x) < 8 && Math.abs(s.y - c.y) < 8,
+        );
+        if (tooClose) continue;
+        if (d < bestD) {
+          bestD = d;
+          best = c;
+        }
+      }
+      starts.push({ x: best.x, y: best.y });
+    }
+    // Then relax the layout: repeatedly move the two closest bases apart by
+    // swapping the offender for the candidate farthest from every other base.
+    for (let pass = 0; pass < 3; pass++) {
+      for (let i = 0; i < starts.length; i++) {
+        const a = starts[i] as GridPoint;
+        let nearest = Number.MAX_SAFE_INTEGER;
+        for (let j = 0; j < starts.length; j++) {
+          if (i === j) continue;
+          const b = starts[j] as GridPoint;
+          nearest = Math.min(nearest, Math.hypot(a.x - b.x, a.y - b.y));
+        }
+        const want = (width * 45) / 100;
+        if (nearest >= want) continue;
+        let best = a;
+        let bestScore = nearest;
+        for (const c of candidates) {
+          let minOther = Number.MAX_SAFE_INTEGER;
+          for (let j = 0; j < starts.length; j++) {
+            if (i === j) continue;
+            const b = starts[j] as GridPoint;
+            minOther = Math.min(minOther, Math.hypot(c.x - b.x, c.y - b.y));
+          }
+          if (minOther > bestScore) {
+            bestScore = minOther;
+            best = c;
+          }
+        }
+        starts[i] = best;
+      }
+    }
   }
 
   // --- Clear a buildable plateau around every start. ---
@@ -350,45 +402,39 @@ export function generateMap(opts: MapGenOptions): GeneratedMap {
   const sacredSiteSpots: GridPoint[] = [];
   const relicSpots: GridPoint[] = [];
   // The sacred-site victory needs MIN_SACRED_SITES sites held at once, so the
-  // generator must always place at least that many: a map that spawns two sites
-  // makes that victory condition impossible. Candidates that land too close to a
-  // starting base are pushed outward instead of being discarded.
+  // generator must always place at least that many, on contested ground: as far
+  // from every base as the map allows, and spread out from each other. A ring
+  // radius does not work here because it lands in water on most seeds and the
+  // fallback then dropped the sites into the players' laps.
   const siteCount = clamp(count + 2, MIN_SACRED_SITES, 6);
+  const minDistanceFromBase = Math.trunc(width * 0.16);
+  const siteCandidates = candidates.filter(
+    (c) => !starts.some((st) => Math.hypot(st.x - c.x, st.y - c.y) < minDistanceFromBase),
+  );
+  // If the map is too tight to honour that distance, relax it rather than
+  // dropping the sites.
+  const pool = siteCandidates.length >= siteCount ? siteCandidates : candidates;
   for (let n = 0; n < siteCount; n++) {
-    const a = Math.trunc((n * 256) / siteCount) + 24;
-    let placed = false;
-    for (let attempt = 0; attempt < 6 && !placed; attempt++) {
-      // Each retry pushes the ring further out, away from the starting bases.
-      const r = Math.trunc((landRadius * (60 + attempt * 6)) / 100);
-      const spot = findNearestClear(
-        passable,
-        width,
-        height,
-        cx + Math.trunc((r * cosTable(a)) / 1024),
-        cy + Math.trunc((r * sinTable(a)) / 1024),
-        18,
-      );
-      if (nearAnyStart(spot.x, spot.y, starts, 4)) continue;
-      if (sacredSiteSpots.some((s) => Math.abs(s.x - spot.x) < 4 && Math.abs(s.y - spot.y) < 4)) {
-        continue;
+    let best: GridPoint | null = null;
+    let bestScore = -1;
+    for (const c of pool) {
+      let nearestBase = Number.MAX_SAFE_INTEGER;
+      for (const st of starts) nearestBase = Math.min(nearestBase, Math.hypot(st.x - c.x, st.y - c.y));
+      let nearestSite = Number.MAX_SAFE_INTEGER;
+      for (const site of sacredSiteSpots) {
+        nearestSite = Math.min(nearestSite, Math.hypot(site.x - c.x, site.y - c.y));
       }
-      sacredSiteSpots.push(spot);
-      placed = true;
+      // Balance "far from the bases" against "spread from the other sites".
+      const score = Math.min(nearestBase, nearestSite * 1.5);
+      if (score > bestScore) {
+        bestScore = score;
+        best = c;
+      }
     }
-    if (!placed) {
-      // Last resort: keep it anyway rather than shipping an unwinnable map.
-      const r = Math.trunc((landRadius * 75) / 100);
-      const spot = findNearestClear(
-        passable,
-        width,
-        height,
-        cx + Math.trunc((r * cosTable(a)) / 1024),
-        cy + Math.trunc((r * sinTable(a)) / 1024),
-        18,
-      );
-      sacredSiteSpots.push(spot);
-    }
+    if (!best) break;
+    sacredSiteSpots.push(best);
   }
+
   for (let n = 0; n < 6; n++) {
     const px = rng.nextInt(width);
     const py = rng.nextInt(height);
@@ -436,6 +482,43 @@ export function generateMap(opts: MapGenOptions): GeneratedMap {
 /* ------------------------------------------------------------------ *
  * Helpers
  * ------------------------------------------------------------------ */
+
+/**
+ * Land tiles a starting base could use, subsampled on a grid so the search
+ * stays cheap. Only tiles with room around them are kept, so a base never ends
+ * up wedged against water or a cliff.
+ */
+function collectLandCandidates(
+  passable: Uint8Array,
+  width: number,
+  height: number,
+  landRadius: number,
+): GridPoint[] {
+  const out: GridPoint[] = [];
+  const step = 3;
+  const cx = width >> 1;
+  const cy = height >> 1;
+  const maxDist = Math.trunc(landRadius * 0.95);
+  for (let y = 4; y < height - 4; y += step) {
+    for (let x = 4; x < width - 4; x += step) {
+      const dx = x - cx;
+      const dy = y - cy;
+      if (dx * dx + dy * dy > maxDist * maxDist) continue;
+      // Require a clear 5x5 neighbourhood so the base plateau fits.
+      let clear = true;
+      for (let oy = -2; oy <= 2 && clear; oy++) {
+        for (let ox = -2; ox <= 2; ox++) {
+          if (!passable[(y + oy) * width + (x + ox)]) {
+            clear = false;
+            break;
+          }
+        }
+      }
+      if (clear) out.push({ x, y });
+    }
+  }
+  return out;
+}
 
 /** 16-entry direction table, index 0..255 => unit vector scaled by 1024. */
 const SIN16: number[] = [

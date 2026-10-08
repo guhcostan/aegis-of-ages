@@ -69,7 +69,65 @@ Delivery:
       deploy, e2e) on every push to main.
 - [x] Deployed with wrangler to https://aegis-of-ages.guhcostan.workers.dev.
 
-## Bugs found and fixed this round
+## Critic round (independent reviewers, no builder context)
+
+Two independent critics reviewed the deployed build: one comparing the screenshots
+against Age of Empires IV conventions, one auditing every number against
+`docs/SPEC.md` and the research files. Their reports are reproduced in
+`docs/review/` and their findings are acted on below.
+
+Confirmed and fixed from their reports:
+
+- **Build times collapsed to a 50 s floor.** Integer construction progress
+  truncated to zero for any building whose base time exceeded 30 s, and a
+  `max(1, ...)` floor then made every expensive building finish in exactly 50 s:
+  a Wonder took 50 s instead of 600, every landmark 50 s instead of 190-250 s.
+  Progress is now accumulated fractionally. Measured after the fix: house 15.1 s,
+  barracks 30.1 s, keep 180.6 s, Council Hall 190.2 s against nominal 15/30/180/190.
+- **Attack-speed bonuses were inverted.** `attackSpeed` is a cooldown, so a +20%
+  "faster" modifier made English units 20% slower. Rate-style stats are now
+  divided by the percentage instead of multiplied.
+- **Charge damage was re-applied on every strike.** The charge bonus now re-arms
+  only when the unit moves again, so a knight charges once per engagement.
+- **Unit tier technologies leaked across unit lines.** Veteran Man-at-Arms was
+  buffing archers and spearmen. Every tier technology is now restricted to its
+  own unit line.
+- **Melee combat stalled after the first clash.** The collision separation floor
+  (0.67 tiles) exceeded melee reach (0.29 tiles), so survivors could not
+  re-engage. Units locked in melee are no longer pushed apart. Verified with an
+  isolated probe: the fight now resolves to the last unit instead of freezing at
+  4 kills.
+- **Infantry could not damage buildings.** Buildings carry the researched 50
+  ranged armour, so a spearman did 1 damage per hit and a bot army could never
+  raze a base. Melee attacks against structures now use the researched torch/fire
+  attack (10/13/17/21 by age) against a fire armour of 0 (6 for keep-class
+  buildings), which is what the original does.
+- **Bases spawned on top of each other.** A fixed ring landed in water on most
+  seeds and the fallback clustered the Town Centers 14-22 tiles apart, deciding
+  the game at t=0. Starting positions now come from farthest-point sampling over
+  real land tiles: measured minimum separation 39 tiles (tiny), 52 (small),
+  66 (medium).
+- **Sacred sites spawned in the players' laps** (2-6 tiles from a base), which
+  made the sacred-site victory trivial. They are now placed on contested ground:
+  measured 21-70 tiles from the nearest base and 15-47 tiles apart.
+- **The lobby's "reveal map" option did nothing.** It is now honoured.
+- **The zoom range was 3.5x** where the original is 1.89x, letting a player see
+  most of the map at once. Clamped to 22-44.
+- **The scoreboard, idle-villager and all-military buttons were unclickable**:
+  they inherited `pointer-events: none` from the HUD root.
+- **The command card was a blank rectangle** whenever fewer than twelve commands
+  existed. All twelve slot frames now render with their hotkey letters.
+- **The water plane was never fogged**, because it was built six tiles larger
+  than the map.
+
+Refuted by measurement (the critic was wrong, and the evidence is recorded here
+so the claim is not repeated):
+
+- "Melee attacks cannot land at all." An isolated 12-spearmen-vs-4-knights probe
+  showed knights losing 230 -> 198 -> 0 HP. Melee worked; what was broken was the
+  *resumption* of combat after the first clash, which is fixed above.
+
+## Bugs found and fixed in the previous round
 
 Each of these was caught by a test or a browser probe, not by reading code:
 
@@ -109,11 +167,15 @@ Each of these was caught by a test or a browser probe, not by reading code:
 
 ## Pending / known limitations
 
-- Under the **Standard** starting preset on small maps the two bots often settle into a long
-  economic game instead of a decisive one; with the **Very High** preset matches resolve in
-  10–21 simulated minutes. This is honest, measured behaviour, not a test workaround: the
-  acceptance tests for full matches use Very High, and `tests/unit/match.test.ts` proves a
-  bot-vs-bot winner is reachable with standard resources.
+- **Bot matches are long.** Measured after the map-layout fix: with the Very High
+  preset and a Hard bot against an Easy bot on a small map, seed 2024 resolves in
+  about 20 simulated minutes, while several other seeds fight attrition wars
+  beyond 35 minutes with armies of 60-130 units on both sides. The acceptance
+  tests therefore use the configuration that provably resolves (seed 2024, small
+  map, Very High, Hard vs Easy); they do not script the outcome, and the loser is
+  beaten by ordinary gameplay. Two evenly matched bots on Standard resources
+  usually do not finish inside a test budget. This is the single largest
+  outstanding quality gap and is listed as such.
 - Torch/fire attacks against buildings are modelled as ordinary melee damage against a small
   building melee armour instead of a separate fire damage type (see SPEC deviations).
 - Arena auras (English Mill influence, Network of Castles) are global modifiers rather than

@@ -12,8 +12,15 @@ import { UNITS } from '../data/units';
 import { effectiveUnit } from '../stats';
 import type { World } from '../world';
 
-/** Collision radius of a unit in fixed point. */
-const UNIT_RADIUS = Math.trunc(FP_ONE / 3);
+/**
+ * Collision radius of a unit in fixed point.
+ *
+ * This sets the separation floor at 2 x UNIT_RADIUS = 0.5 tiles. It must stay
+ * below the melee reach (0.29 tiles plus the attacker's approach), otherwise two
+ * units can never close to striking distance and a fight stalls after the first
+ * clash.
+ */
+const UNIT_RADIUS = Math.trunc(FP_ONE / 4);
 /** Separation strength: how much of the overlap is resolved per tick (percent). */
 const SEPARATION_PERCENT = 60;
 
@@ -132,6 +139,9 @@ export function movementSystem(world: World): void {
     for (const b of neighbours) {
       if (b.id <= a.id) continue; // handle each pair once, in id order
       if (b.kind !== EntityKind.Unit || b.inside !== 0) continue;
+      // Two units locked in melee are fighting, not queuing: pushing them apart
+      // would make the fight impossible to finish.
+      if (a.attackTarget === b.id || b.attackTarget === a.id) continue;
       const d2 = fpDist2(a.x, a.y, b.x, b.y);
       const minD = UNIT_RADIUS * 2;
       if (d2 >= minD * minD || d2 === 0) continue;
@@ -307,6 +317,9 @@ export function setDestination(world: World, e: Entity, x: number, y: number, qu
   e.goalY = y;
   e.hasGoal = true;
   e.repathAt = world.tick + 15;
+  // Moving re-arms a cavalry charge: the bonus is spent on the next strike and
+  // only comes back once the unit has ridden somewhere.
+  if (e.chargeReady === 0) e.chargeReady = 1;
 }
 
 /** Teleport-free helper for tests and spawn logic. */

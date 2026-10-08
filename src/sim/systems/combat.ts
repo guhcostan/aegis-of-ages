@@ -164,8 +164,6 @@ function runUnitCombat(world: World, e: Entity): void {
   }
   e.windup = Math.max(1, def.windup);
   e.cooldown = eff.attackSpeed;
-  // A charge is spent when the unit stops to fight; it recharges by moving.
-  if (e.chargeReady === 0) e.chargeReady = 1;
 }
 
 /** Enemy entity this unit should attack on its own initiative. */
@@ -204,12 +202,29 @@ function footprintRadius(target: Entity): number {
   return Math.trunc((Math.max(def.width, def.height) * FP_ONE) / 2);
 }
 
+/**
+ * Torch (fire) damage by age, from the AoE IV research: 10 / 13 / 17 / 21 for
+ * Dark / Feudal / Castle / Imperial. This is what melee units use against
+ * buildings, and it is why infantry can actually raze a base: against a
+ * building's 50 ranged armour an archer does 1 damage, while a spearman's torch
+ * does its full fire damage minus the building's fire armour.
+ */
+const TORCH_DAMAGE_BY_AGE = [10, 13, 17, 21];
+
 /** Apply one attack from `attacker` onto `target`. */
 export function resolveAttack(world: World, attacker: Entity, target: Entity): void {
   const def = UNITS[attacker.def];
   if (!def) return;
   const ranged = isRanged(def);
   const eff = effectiveUnit(world, attacker.owner, def);
+
+  // Attacks against buildings follow the original's three-way split.
+  if (target.kind === EntityKind.Building) {
+    resolveBuildingAttack(world, attacker, target, def, ranged, eff);
+    attacker.facing = angleTo(attacker.x, attacker.y, target.x, target.y);
+    return;
+  }
+
   const base = ranged ? eff.rangedAttack : eff.meleeAttack;
   if (base <= 0 && def.bonusVs.length === 0) return;
 
@@ -225,6 +240,38 @@ export function resolveAttack(world: World, attacker: Entity, target: Entity): v
     applyDamage(world, target, damage, attacker.owner, attacker.id);
   }
   attacker.facing = angleTo(attacker.x, attacker.y, target.x, target.y);
+}
+
+/** Melee torch, siege engine or arrow against a structure. */
+function resolveBuildingAttack(
+  world: World,
+  attacker: Entity,
+  target: Entity,
+  def: (typeof UNITS)[string],
+  ranged: boolean,
+  eff: ReturnType<typeof effectiveUnit>,
+): void {
+  const bdef = BUILDINGS[target.def];
+  const fireArmor = bdef?.fireArmor ?? 0;
+  const player = world.players[attacker.owner];
+  const age = player?.age ?? 0;
+
+  if (def.classes.includes(UnitClass.Siege)) {
+    // Siege engines ignore fire armour and hit the structure directly.
+    const damage = Math.max(1, eff.rangedAttack + bonusAgainst(def, target));
+    applyDamageTyped(world, target, damage, true, attacker.owner, 0);
+    return;
+  }
+  if (!ranged) {
+    // Torch: fire damage against fire armour.
+    const torch = TORCH_DAMAGE_BY_AGE[Math.min(age, TORCH_DAMAGE_BY_AGE.length - 1)] ?? 10;
+    const damage = Math.max(1, torch - fireArmor);
+    applyDamageTyped(world, target, damage, true, attacker.owner, 0);
+    return;
+  }
+  // Arrows and bolts bounce off masonry.
+  const damage = Math.max(1, eff.rangedAttack - (bdef?.rangedArmor ?? 0));
+  applyDamageTyped(world, target, damage, true, attacker.owner, 0);
 }
 
 /**
@@ -297,8 +344,9 @@ export function applyDamageTyped(
   rawDamage: number,
   ranged: boolean,
   attackerOwner: number,
+  armorOverride?: number,
 ): void {
-  const armor = armorAgainst(world, target, ranged);
+  const armor = armorOverride ?? armorAgainst(world, target, ranged);
   // Siege engines carry a percentage resistance to ranged damage (55-95% in
   // AoE IV). Resistance is multiplicative and applied before armor.
   const resistance = ranged ? rangedResistanceOf(world, target) : 0;

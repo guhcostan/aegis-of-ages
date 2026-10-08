@@ -203,7 +203,7 @@ export function buildTerrainMesh(map: GameMap, material: THREE.Material): THREE.
 
 /** Static water plane covering the whole map, sitting just above sea level. */
 export function buildWaterMesh(map: GameMap, material: THREE.Material): THREE.Mesh {
-  const geometry = new THREE.PlaneGeometry(map.width + 6, map.height + 6, 1, 1);
+  const geometry = new THREE.PlaneGeometry(map.width, map.height, 1, 1);
   geometry.rotateX(-Math.PI / 2);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'aegis-water';

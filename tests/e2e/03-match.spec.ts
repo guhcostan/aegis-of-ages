@@ -40,12 +40,12 @@ test.describe('complete matches', () => {
     // ...then start with settings under which a match resolves decisively
     // inside the test budget (Very High start, one Intermediate bot).
     await startMatch(page, {
-      seed: 777,
+      seed: 2024,
       mapSize: 'small',
       startingResources: 'veryhigh',
       playerAsBot: true,
       playerBotDifficulty: 2,
-      bots: [{ civ: 'french', difficulty: 1, team: 0 }],
+      bots: [{ civ: 'french', difficulty: 0, team: 0 }],
     });
 
     const result = await playToVictory(page, 60 * 40);
@@ -64,7 +64,7 @@ test.describe('complete matches', () => {
       seed: 2024,
       playerAsBot: true,
       playerBotDifficulty: 2,
-      bots: [{ civ: 'french', difficulty: 1, team: 0 }],
+      bots: [{ civ: 'french', difficulty: 0, team: 0 }],
       mapSize: 'small',
       startingResources: 'veryhigh',
     });

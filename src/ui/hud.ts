@@ -1276,11 +1276,15 @@ function syncCommands(dom: HudDom, model: HudModel): void {
   dom.sig.commands = sig;
 
   for (const cell of dom.commandCells) {
-    cell.root.hidden = true;
+    // Every slot stays visible as an empty frame with its hotkey letter, the way
+    // AoE IV shows the whole 4x3 grid; hiding the unused slots left a large
+    // featureless rectangle in the bottom centre.
+    cell.root.hidden = false;
+    cell.root.disabled = true;
     delete cell.root.dataset.cmd;
-    cell.root.disabled = false;
     cell.root.title = '';
-    cell.root.classList.remove('is-unaffordable', 'is-disabled');
+    cell.root.classList.remove('is-unaffordable');
+    cell.root.classList.add('is-disabled', 'is-empty');
     setText(cell.label, '');
     setText(cell.cost, '');
     setClass(cell.cost, 'is-red', false);
@@ -1289,8 +1293,9 @@ function syncCommands(dom: HudDom, model: HudModel): void {
   for (const command of model.commands) {
     const slot = ((command.slot % HUD_GRID_SLOTS) + HUD_GRID_SLOTS) % HUD_GRID_SLOTS;
     const cell = dom.commandCells[slot];
-    if (!cell.root.hidden) continue; // first command wins its slot
+    if (cell.root.dataset.cmd !== undefined) continue; // first command wins its slot
     cell.root.hidden = false;
+    cell.root.classList.remove('is-empty');
     cell.root.dataset.cmd = command.id;
     cell.root.disabled = !command.enabled;
     cell.root.title = command.tooltip;

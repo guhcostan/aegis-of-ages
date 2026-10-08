@@ -162,6 +162,7 @@ export class World {
       inside: 0,
       production: { entries: [], rallyX: -1, rallyY: -1, rallyTarget: 0 },
       construction: 1000,
+      buildAccum: 0,
       popProvided: 0,
       builders: 0,
       relicHeld: 0,

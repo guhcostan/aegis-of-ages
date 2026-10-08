@@ -135,6 +135,30 @@ function applyStat(
   return value;
 }
 
+/**
+ * Apply a stat where a positive percentage means "faster": the duration is
+ * divided by (1 + pct/100) instead of multiplied.
+ */
+function applyRateStat(
+  base: number,
+  effects: TechEffect[],
+  stat: TechStat,
+  pred: (e: TechEffect) => boolean,
+): number {
+  let value = base;
+  for (const e of effects) {
+    if (e.stat !== stat || !pred(e)) continue;
+    value += e.flat;
+  }
+  let pct = 0;
+  for (const e of effects) {
+    if (e.stat !== stat || !pred(e)) continue;
+    pct += e.pct;
+  }
+  if (pct !== 0) value = Math.trunc((value * 100) / (100 + pct));
+  return Math.max(1, value);
+}
+
 export function effectiveUnit(world: World, playerId: number, def: UnitDef): EffectiveUnit {
   const player = world.players[playerId];
   if (!player) {
@@ -178,7 +202,10 @@ export function effectiveUnit(world: World, playerId: number, def: UnitDef): Eff
     speed: applyStat(def.speed, effects, TechStat.Speed, pred),
     range: applyStat(def.range, effects, TechStat.Range, pred),
     los: applyStat(def.los, effects, TechStat.Los, pred),
-    attackSpeed: applyStat(def.attackSpeed, effects, TechStat.AttackSpeed, pred),
+    // Attack speed is a RATE, not a duration: a +20% bonus must shorten the
+    // cooldown. applyStat adds the percentage, which for a cooldown would make
+    // the unit slower, so the percentage is inverted here.
+    attackSpeed: applyRateStat(def.attackSpeed, effects, TechStat.AttackSpeed, pred),
     trainTime: applyStat(def.trainTime, effects, TechStat.TrainTime, pred),
     cost: {
       food: applyStat(def.cost.food, effects, TechStat.CostFood, pred),

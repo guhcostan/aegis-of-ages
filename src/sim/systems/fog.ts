@@ -21,6 +21,17 @@ export interface PlayerFog {
   lastUpdate: number;
 }
 
+/**
+ * Module-level switch set once per match. Fog is recomputed for every player on
+ * every update, so carrying the flag here keeps the call sites unchanged.
+ */
+let revealAll = false;
+
+/** Enable or disable the "reveal map" lobby option for the whole match. */
+export function setRevealAll(reveal: boolean): void {
+  revealAll = reveal;
+}
+
 export function createFog(width: number, height: number): PlayerFog {
   return {
     visible: new Uint8Array(width * height),
@@ -33,6 +44,14 @@ export function createFog(width: number, height: number): PlayerFog {
 export function updateFog(world: World, fog: PlayerFog, playerId: number, force = false): void {
   if (!force && world.tick - fog.lastUpdate < FOG_UPDATE_INTERVAL) return;
   fog.lastUpdate = world.tick;
+
+  // The lobby's "reveal map" option means exactly that: the whole map is seen.
+  // Without this branch the option was accepted and then silently ignored.
+  if (revealAll) {
+    fog.visible.fill(1);
+    fog.explored.fill(1);
+    return;
+  }
   fog.visible.fill(0);
 
   const { width, height } = world.map;

@@ -37,8 +37,9 @@ function e(
   flat: number,
   pct = 0,
   cls: UnitClass | null = null,
+  only: string | null = null,
 ): TechEffect {
-  return { stat, appliesTo, flat, pct, cls, only: null };
+  return { stat, appliesTo, flat, pct, cls, only };
 }
 
 /* ------------------------------------------------------------------ *
@@ -202,7 +203,10 @@ export const HARDENED_SPEARMAN = tech({
   cost: costOf({ food: 15, gold: 35 }),
   researchTime: T(15),
   building: 'barracks',
-  effects: [e(TechStat.Hp, 'all', 10), e(TechStat.MeleeAttack, 'military', 1, 0, UnitClass.LightInfantry)],
+  effects: [
+    e(TechStat.Hp, 'military', 10, 0, null, 'spearman'),
+    e(TechStat.MeleeAttack, 'military', 1, 0, null, 'spearman'),
+  ],
   blurb: 'Spearmen gain hardened shafts and sturdier shields.',
 });
 
@@ -213,7 +217,10 @@ export const VETERAN_SPEARMAN = tech({
   cost: costOf({ food: 100, gold: 250 }),
   researchTime: T(60),
   building: 'barracks',
-  effects: [e(TechStat.Hp, 'all', 20), e(TechStat.MeleeAttack, 'military', 1, 0, UnitClass.LightInfantry)],
+  effects: [
+    e(TechStat.Hp, 'military', 20, 0, null, 'spearman'),
+    e(TechStat.MeleeAttack, 'military', 1, 0, null, 'spearman'),
+  ],
   requires: ['hardened_spearman'],
   blurb: 'Veteran spearmen hold the line far longer.',
 });
@@ -225,7 +232,10 @@ export const ELITE_SPEARMAN = tech({
   cost: costOf({ food: 300, gold: 700 }),
   researchTime: T(60),
   building: 'barracks',
-  effects: [e(TechStat.Hp, 'all', 30), e(TechStat.MeleeAttack, 'military', 2, 0, UnitClass.LightInfantry)],
+  effects: [
+    e(TechStat.Hp, 'military', 30, 0, null, 'spearman'),
+    e(TechStat.MeleeAttack, 'military', 2, 0, null, 'spearman'),
+  ],
   requires: ['veteran_spearman'],
   blurb: 'Elite spearmen are the end of every cavalry charge.',
 });
@@ -237,7 +247,10 @@ export const VETERAN_ARCHER = tech({
   cost: costOf({ food: 100, gold: 250 }),
   researchTime: T(60),
   building: 'archery_range',
-  effects: [e(TechStat.Hp, 'all', 10), e(TechStat.RangedAttack, 'military', 2, 0, UnitClass.Ranged)],
+  effects: [
+    e(TechStat.Hp, 'military', 10, 0, null, 'archer'),
+    e(TechStat.RangedAttack, 'military', 2, 0, null, 'archer'),
+  ],
   blurb: 'Veteran archers draw heavier bows and shoot further.',
 });
 
@@ -248,7 +261,10 @@ export const ELITE_ARCHER = tech({
   cost: costOf({ food: 300, gold: 700 }),
   researchTime: T(60),
   building: 'archery_range',
-  effects: [e(TechStat.Hp, 'all', 15), e(TechStat.RangedAttack, 'military', 1, 0, UnitClass.Ranged)],
+  effects: [
+    e(TechStat.Hp, 'military', 15, 0, null, 'archer'),
+    e(TechStat.RangedAttack, 'military', 1, 0, null, 'archer'),
+  ],
   requires: ['veteran_archer'],
   blurb: 'Elite archers are the finest marksmen in the realm.',
 });
@@ -261,8 +277,8 @@ export const ELITE_CROSSBOWMAN = tech({
   researchTime: T(60),
   building: 'archery_range',
   effects: [
-    e(TechStat.Hp, 'all', 15),
-    e(TechStat.RangedAttack, 'military', 3, 0, UnitClass.Ranged),
+    e(TechStat.Hp, 'military', 15, 0, null, 'crossbowman'),
+    e(TechStat.RangedAttack, 'military', 3, 0, null, 'crossbowman'),
   ],
   blurb: 'Elite crossbows punch through the heaviest plate.',
 });
@@ -274,7 +290,10 @@ export const VETERAN_HORSEMAN = tech({
   cost: costOf({ food: 100, gold: 250 }),
   researchTime: T(60),
   building: 'stable',
-  effects: [e(TechStat.Hp, 'all', 30), e(TechStat.MeleeAttack, 'military', 2, 0, UnitClass.Cavalry)],
+  effects: [
+    e(TechStat.Hp, 'military', 30, 0, null, 'horseman'),
+    e(TechStat.MeleeAttack, 'military', 2, 0, null, 'horseman'),
+  ],
   blurb: 'Veteran horsemen ride harder and hit sooner.',
 });
 
@@ -285,7 +304,10 @@ export const ELITE_HORSEMAN = tech({
   cost: costOf({ food: 300, gold: 700 }),
   researchTime: T(60),
   building: 'stable',
-  effects: [e(TechStat.Hp, 'all', 25), e(TechStat.MeleeAttack, 'military', 2, 0, UnitClass.Cavalry)],
+  effects: [
+    e(TechStat.Hp, 'military', 25, 0, null, 'horseman'),
+    e(TechStat.MeleeAttack, 'military', 2, 0, null, 'horseman'),
+  ],
   requires: ['veteran_horseman'],
   blurb: 'Elite horsemen run down anything that cannot outrun them.',
 });
@@ -297,7 +319,10 @@ export const VETERAN_KNIGHT = tech({
   cost: costOf({ food: 50, gold: 125 }),
   researchTime: T(30),
   building: 'stable',
-  effects: [e(TechStat.Hp, 'all', 40), e(TechStat.MeleeAttack, 'military', 5, 0, UnitClass.Cavalry)],
+  effects: [
+    e(TechStat.Hp, 'military', 40, 0, null, 'knight'),
+    e(TechStat.MeleeAttack, 'military', 5, 0, null, 'knight'),
+  ],
   blurb: 'Veteran knights are armoured head to toe.',
 });
 
@@ -308,7 +333,10 @@ export const ELITE_KNIGHT = tech({
   cost: costOf({ food: 300, gold: 700 }),
   researchTime: T(60),
   building: 'stable',
-  effects: [e(TechStat.Hp, 'all', 40), e(TechStat.MeleeAttack, 'military', 5, 0, UnitClass.Cavalry)],
+  effects: [
+    e(TechStat.Hp, 'military', 40, 0, null, 'knight'),
+    e(TechStat.MeleeAttack, 'military', 5, 0, null, 'knight'),
+  ],
   requires: ['veteran_knight'],
   blurb: 'Elite knights break infantry lines on the charge.',
 });
@@ -320,7 +348,10 @@ export const VETERAN_MANATARMS = tech({
   cost: costOf({ food: 50, gold: 125 }),
   researchTime: T(30),
   building: 'barracks',
-  effects: [e(TechStat.Hp, 'all', 25), e(TechStat.MeleeAttack, 'military', 2)],
+  effects: [
+    e(TechStat.Hp, 'military', 25, 0, null, 'manatarms'),
+    e(TechStat.MeleeAttack, 'military', 2, 0, null, 'manatarms'),
+  ],
   blurb: 'Veteran men-at-arms advance under a wall of shields.',
 });
 
@@ -331,7 +362,10 @@ export const ELITE_MANATARMS = tech({
   cost: costOf({ food: 300, gold: 700 }),
   researchTime: T(60),
   building: 'barracks',
-  effects: [e(TechStat.Hp, 'all', 25), e(TechStat.MeleeAttack, 'military', 2)],
+  effects: [
+    e(TechStat.Hp, 'military', 25, 0, null, 'manatarms'),
+    e(TechStat.MeleeAttack, 'military', 2, 0, null, 'manatarms'),
+  ],
   requires: ['veteran_manatarms'],
   blurb: 'Elite men-at-arms are almost impossible to remove from a position.',
 });

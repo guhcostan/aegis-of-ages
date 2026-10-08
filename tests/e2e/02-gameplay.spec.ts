@@ -373,15 +373,33 @@ test.describe('combat', () => {
             .filter((e) => e.def === 'villager' && e.owner === 0)
             .map((v) => v.id);
           if (!tc || villagers.length === 0) return false;
-          return api.apply({
-            type: 5,
-            player: 0,
-            units: villagers,
-            defId: id,
-            tileX: (tc.x >> 10) + dx,
-            tileY: (tc.y >> 10) + dy,
-            queue: false,
-          });
+          const tx = tc.x >> 10;
+          const ty = tc.y >> 10;
+          // The map is procedural, so search outward from the preferred offset
+          // rather than assuming that exact tile is free.
+          for (let r = 0; r < 14; r++) {
+            for (const [ox, oy] of [
+              [dx, dy],
+              [dx + r, dy],
+              [dx - r, dy],
+              [dx, dy + r],
+              [dx, dy - r],
+              [dx + r, dy + r],
+              [dx - r, dy - r],
+            ]) {
+              const ok = api.apply({
+                type: 5,
+                player: 0,
+                units: villagers,
+                defId: id,
+                tileX: tx + (ox ?? 0),
+                tileY: ty + (oy ?? 0),
+                queue: false,
+              });
+              if (ok) return true;
+            }
+          }
+          return false;
         },
         { id: defId, dx: ox, dy: oy },
       );
@@ -544,12 +562,17 @@ test.describe('mouse input on the battlefield', () => {
     expect(selected, 'no battlefield click selected anything: the canvas is blocked').toBeGreaterThan(0);
 
     // Right click on open ground must reach the simulation as a move order.
+    // The click may have landed on the Town Center, which has no move order, so
+    // select a villager explicitly first.
     const before = await page.evaluate(() => {
       const api = window.__game;
-      const id = api?.selection()[0];
-      return id ?? 0;
+      const villager = api?.state().entities.find((e) => e.def === 'villager' && e.owner === 0);
+      if (!villager) return 0;
+      api?.select([villager.id]);
+      return villager.id;
     });
     expect(before).toBeGreaterThan(0);
+    await page.waitForTimeout(200);
     await page.mouse.click(viewport.width * 0.5, viewport.height * 0.45, { button: 'right' });
     await page.evaluate(() => window.__game?.step(4));
     const ordered = await page.evaluate(() => {

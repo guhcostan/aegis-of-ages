@@ -44,13 +44,18 @@ import { MinimapPainter, playerColor } from './minimap';
 import type { MinimapRenderOptions } from './minimap';
 
 /* ------------------------------------------------------------------ *
- * Tuning constants (SPEC camera block: pitch ~45-50, FOV ~41, dist 20..70)
+ * Tuning constants (SPEC camera block: pitch ~45-50, FOV ~41)
  * ------------------------------------------------------------------ */
 
 const CAMERA_FOV = 41;
 const CAMERA_PITCH = (47.5 * Math.PI) / 180;
-const MIN_DISTANCE = 20;
-const MAX_DISTANCE = 70;
+/**
+ * Zoom range. AoE IV's skirmish camera spans 36..68 engine units, a ratio of
+ * 1.89x; the earlier 20..70 range was 3.5x and let the player pull back far
+ * enough to see most of the map at once, which is not how the original reads.
+ */
+const MIN_DISTANCE = 22;
+const MAX_DISTANCE = 44;
 /** 135 degrees in 1/256 turns: the isometric-looking default yaw. */
 const DEFAULT_ROTATION = 96;
 const ROTATION_SMOOTH_MS = 90;

@@ -27,17 +27,24 @@ function reachFor(defId: string): number {
 }
 
 /**
- * Construction speed.
+ * Construction speed, in thousandths of a construction point per tick.
  *
  * AoE IV defines a base build time per building (the time one villager needs)
  * and gives every extra villager diminishing returns: the time fraction is
  * 3/(N+2), so two villagers take 75% and ten take 25%.
  *
- * progress per tick = 1000 * (N + 2) / (3 * baseBuildTime)
+ *   progress per tick = 1000 * (N + 2) / (3 * baseBuildTime)
+ *
+ * The value is returned scaled by 1000 and accumulated per site, because for a
+ * 190 s landmark the per-tick progress is 0.26 points: truncating it to an
+ * integer (or flooring it at 1) made every expensive building finish in exactly
+ * 50 seconds instead of its researched build time.
  */
+const BUILD_ACCUM_SCALE = 1000;
+
 function constructionRate(builders: number, baseBuildTime: number): number {
   if (builders <= 0 || baseBuildTime <= 0) return 0;
-  return Math.trunc((1000 * (builders + 2)) / (3 * baseBuildTime));
+  return Math.trunc((1000 * (builders + 2) * BUILD_ACCUM_SCALE) / (3 * baseBuildTime));
 }
 
 /** Existing unfinished building of ours occupying this tile, if any. */
@@ -239,10 +246,12 @@ export function buildSystem(world: World): void {
     const def = BUILDINGS[site.def];
     if (!def) continue;
     const eff = effectiveBuilding(world, site.owner, def);
-    site.construction = Math.min(
-      1000,
-      site.construction + Math.max(1, constructionRate(site.builders, eff.buildTime)),
-    );
+    site.buildAccum += constructionRate(site.builders, eff.buildTime);
+    const whole = Math.trunc(site.buildAccum / BUILD_ACCUM_SCALE);
+    if (whole > 0) {
+      site.buildAccum -= whole * BUILD_ACCUM_SCALE;
+      site.construction = Math.min(1000, site.construction + whole);
+    }
     // Hit points grow with construction progress.
     const targetHp = effectiveBuilding(world, site.owner, def).hp;
     site.maxHp = targetHp;

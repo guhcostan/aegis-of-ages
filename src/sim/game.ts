@@ -30,7 +30,7 @@ import { combatSystem } from './systems/combat';
 import { religionSystem, pickupRelic, orderDropRelic } from './systems/religion';
 import { tradeSystem, orderMerchant } from './systems/trade';
 import { victorySystem, objectives, type MatchResult } from './systems/victory';
-import { createFog, updateFog, type PlayerFog } from './systems/fog';
+import { createFog, setRevealAll, updateFog, type PlayerFog } from './systems/fog';
 import { effectiveUnit } from './stats';
 
 export interface GameOptions extends Partial<MatchConfig> {
@@ -121,6 +121,8 @@ export class Game {
       maxTicks: options.maxTicks ?? TICK_RATE * 60 * 120,
     };
     this.config = config;
+    // Apply the lobby's reveal-map option before the first fog update.
+    setRevealAll(config.revealMap);
 
     const generated = generateMap({
       seed: config.seed,

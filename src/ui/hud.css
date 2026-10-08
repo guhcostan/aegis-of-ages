@@ -135,6 +135,15 @@
 }
 
 .aoe-topleft,
+.aoe-topright,
+.aoe-topright *,
+.aoe-actions,
+.aoe-actions * {
+  /* These controls live inside containers that inherit `pointer-events: none`
+     from the HUD root, which made them impossible to click. */
+  pointer-events: auto;
+}
+
 .aoe-topright {
   display: flex;
   align-items: flex-start;
@@ -873,6 +882,14 @@
   grid-template-columns: repeat(4, 70px);
   grid-template-rows: repeat(3, 70px);
   gap: 4px;
+}
+
+.aoe-cmd.is-empty {
+  opacity: 0.45;
+}
+
+.aoe-cmd.is-empty .aoe-cmd-icon {
+  opacity: 0.25;
 }
 
 .aoe-cmd {

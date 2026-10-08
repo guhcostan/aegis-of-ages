@@ -160,6 +160,11 @@ export interface BuildingDef {
   hp: number;
   meleeArmor: number;
   rangedArmor: number;
+  /**
+   * Armour against the torch/fire attack that melee units use against
+   * buildings. AoE IV gives ordinary buildings 0 and keep-class buildings 6.
+   */
+  fireArmor: number;
   /** Footprint in tiles. */
   width: number;
   height: number;
@@ -391,6 +396,8 @@ export interface Entity {
   production: ProductionQueue;
   /** 0..1000 build progress; 1000 means finished. */
   construction: number;
+  /** Fractional construction accumulator, in thousandths of a point. */
+  buildAccum: number;
   /** Population currently provided by this building (for houses). */
   popProvided: number;
   /** Workers currently constructing, tracked for progress speed. */
