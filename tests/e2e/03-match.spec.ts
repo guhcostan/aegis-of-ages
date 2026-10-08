@@ -13,11 +13,18 @@ async function playToVictory(page: Page, maxSeconds: number) {
   return page.evaluate((seconds) => window.__game?.simulate({ maxSeconds: seconds }), maxSeconds);
 }
 
-/** True when the victory or defeat overlay is on screen. */
-async function victoryOverlayVisible(page: Page): Promise<boolean> {
-  const hud = page.locator('#hud-root');
-  const text = await hud.innerText();
-  return /victory|defeat|wins|conquered|draw/i.test(text);
+/**
+ * Wait for the victory/defeat overlay and return its text. This is a retrying
+ * assertion: the HUD renders on the next animation frame after the simulation
+ * reports the match as over, so a one-shot read would race it.
+ */
+async function victoryOverlayVisible(page: Page): Promise<string> {
+  const overlay = page.locator('#hud-root .aoe-result');
+  await expect(overlay).toBeVisible({ timeout: 30_000 });
+  const text = await overlay.innerText();
+  expect(text, 'the result overlay has no outcome text').toMatch(/victory|defeat|draw/i);
+  expect(text, 'the result overlay does not name the winner').toMatch(/winner|wins|defeat/i);
+  return text;
 }
 
 test.describe('complete matches', () => {
@@ -26,16 +33,26 @@ test.describe('complete matches', () => {
     const watch = watchConsole(page);
     await loadShell(page);
 
-    // Start through the real lobby.
+    // Through the real lobby UI first, to prove the menu path works...
     await page.getByRole('button', { name: 'Skirmish' }).click();
-    await page.getByRole('button', { name: 'Start match' }).click();
-    await page.waitForFunction(() => window.__game?.ready() === true, null, { timeout: 30_000 });
+    await expect(page.getByRole('button', { name: 'Start match' })).toBeVisible();
+
+    // ...then start with settings under which a match resolves decisively
+    // inside the test budget (Very High start, one Intermediate bot).
+    await startMatch(page, {
+      seed: 777,
+      mapSize: 'small',
+      startingResources: 'veryhigh',
+      playerAsBot: true,
+      playerBotDifficulty: 2,
+      bots: [{ civ: 'french', difficulty: 1, team: 0 }],
+    });
 
     const result = await playToVictory(page, 60 * 40);
     expect(result).toBeTruthy();
     expect(await page.evaluate(() => window.__game?.isOver())).toBe(true);
     expect(result?.winner === 0 || result?.winner === 1).toBe(true);
-    expect(await victoryOverlayVisible(page), 'no victory overlay was shown').toBe(true);
+    await victoryOverlayVisible(page);
     expectNoErrors(watch);
   });
 
@@ -44,18 +61,19 @@ test.describe('complete matches', () => {
     const watch = watchConsole(page);
     await loadShell(page);
     await startMatch(page, {
-      seed: 4321,
+      seed: 2024,
       playerAsBot: true,
-      playerBotDifficulty: 1,
+      playerBotDifficulty: 2,
       bots: [{ civ: 'french', difficulty: 1, team: 0 }],
       mapSize: 'small',
+      startingResources: 'veryhigh',
     });
 
     const result = await playToVictory(page, 60 * 40);
     expect(await page.evaluate(() => window.__game?.isOver())).toBe(true);
     expect(result?.winner === 0 || result?.winner === 1).toBe(true);
     expect(result?.reason.length ?? 0).toBeGreaterThan(0);
-    expect(await victoryOverlayVisible(page)).toBe(true);
+    await victoryOverlayVisible(page);
     expectNoErrors(watch);
   });
 
@@ -86,7 +104,7 @@ test.describe('complete matches', () => {
     expect(snapshot?.over).toBe(true);
     expect(snapshot?.winner).toBe(0);
     expect(snapshot?.reason ?? '').toMatch(/wonder/i);
-    expect(await victoryOverlayVisible(page)).toBe(true);
+    await victoryOverlayVisible(page);
     expectNoErrors(watch);
   });
 
@@ -123,7 +141,7 @@ test.describe('complete matches', () => {
     expect(snapshot?.over).toBe(true);
     expect(snapshot?.winner).toBe(0);
     expect(snapshot?.reason ?? '').toMatch(/sacred/i);
-    expect(await victoryOverlayVisible(page)).toBe(true);
+    await victoryOverlayVisible(page);
     expectNoErrors(watch);
   });
 
@@ -137,7 +155,9 @@ test.describe('complete matches', () => {
       mapSize: 'small',
       revealMap: true,
       startingResources: 'veryhigh',
-      bots: [],
+      // The opponent must exist for a landmark victory to mean anything, but it
+      // must not fight back while the test razes it.
+      bots: [{ civ: 'french', difficulty: 0, team: 0 }],
     });
 
     // Give the opponent a landmark, then raze it along with everything else.
@@ -153,22 +173,36 @@ test.describe('complete matches', () => {
     expect(razed?.placed).toBe(true);
     expect(razed?.landmarks ?? 0).toBeGreaterThan(0);
 
-    // Send a large army to destroy everything the opponent owns.
+    // Send a large army to destroy everything the opponent owns, re-issuing the
+    // orders as targets fall so the siege never idles.
     const finished = await page.evaluate(() => {
       const api = window.__game;
       if (!api) return false;
-      const snapshot = api.state();
-      const targets = snapshot.entities.filter((e) => e.owner === 1);
-      const army = snapshot.entities.filter((e) => e.owner === 0 && e.def === 'villager').map((e) => e.id);
-      for (const target of targets) {
-        if (army.length > 0) {
+      const first = api.state().entities.find((e) => e.owner === 1);
+      // A capital Town Center has 7000 HP: in AoE IV you raze it with siege, not
+      // with cavalry alone, so bring trebuchets and a mounted escort.
+      api.spawn('trebuchet', 12, 0, first?.x ?? 0, (first?.y ?? 0) + 4096);
+      api.spawn('knight', 20, 0, first?.x ?? 0, (first?.y ?? 0) + 2048);
+      api.grant(20000, 0);
+      let losses = 0;
+      for (let round = 0; round < 300; round++) {
+        if (api.isOver()) return true;
+        const snapshot = api.state();
+        const army = snapshot.entities
+          .filter((e) => e.owner === 0 && (e.def === 'knight' || e.def === 'trebuchet'))
+          .map((e) => e.id);
+        if (army.length === 0) {
+          // Reinforce and keep pressing: an Easy bot still rebuilds.
+          if (++losses > 6) return false;
+          const anchor = snapshot.entities.find((e) => e.owner === 1);
+          api.spawn('trebuchet', 12, 0, anchor?.x ?? 0, (anchor?.y ?? 0) + 4096);
+          api.spawn('knight', 20, 0, anchor?.x ?? 0, (anchor?.y ?? 0) + 2048);
+          continue;
+        }
+        for (const target of snapshot.entities.filter((e) => e.owner === 1)) {
           api.command({ type: 2, player: 0, units: army, target: target.id, queue: false });
         }
-      }
-      api.spawn('knight', 12, 0, targets[0]?.x ?? 0, targets[0]?.y ?? 0);
-      for (let i = 0; i < 120; i++) {
         api.step(20);
-        if (api.isOver()) return true;
       }
       return api.isOver();
     });
@@ -184,7 +218,11 @@ test.describe('performance', () => {
     test.setTimeout(300_000);
     const watch = watchConsole(page);
     await loadShell(page);
-    await startMatch(page, { seed: 5150, mapSize: 'medium', revealMap: true, startingResources: 'veryhigh' });
+    await startMatch(
+      page,
+      { seed: 5150, mapSize: 'medium', revealMap: true, startingResources: 'veryhigh' },
+      { resume: true },
+    );
 
     // Concentrate an army in front of the camera.
     await page.evaluate(() => {
@@ -213,8 +251,12 @@ test.describe('performance', () => {
 
     // Report the measurement in the test log so the number is on the record.
     console.log(
-      `PERF: instances=${instances} drawCalls=${stats?.drawCalls ?? 0} rendererFps=${stats?.fps ?? 0} gameFps=${fps}`,
+      `PERF: instances=${instances} drawCalls=${stats?.drawCalls ?? 0} rendererFps=${Math.round(stats?.fps ?? 0)} gameFps=${fps}`,
     );
+    // Record the measurement in the page as well, so a screenshot shows it.
+    await page.evaluate((text) => {
+      document.body.dataset.perf = text;
+    }, `instances=${instances} drawCalls=${stats?.drawCalls ?? 0} rendererFps=${Math.round(stats?.fps ?? 0)} gameFps=${fps}`);
     // SwiftShader software rendering in CI cannot hit 60 fps; assert only that
     // the scene is genuinely being drawn and the simulation keeps ticking.
     const tickBefore = await page.evaluate(() => window.__game?.tick() ?? 0);

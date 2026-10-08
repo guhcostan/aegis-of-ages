@@ -19,6 +19,7 @@ interface MatchOutcome {
   ages: number[];
   buildings: number[];
   military: number[];
+  defeated: boolean[];
   gathered: number[];
   hash: number;
 }
@@ -58,8 +59,10 @@ function playBotMatch(options: {
   const buildings: number[] = [];
   const military: number[] = [];
   const gathered: number[] = [];
+  const defeated: boolean[] = [];
   for (const player of game.world.players) {
     ages.push(player.age);
+    defeated.push(player.defeated);
     let b = 0;
     let m = 0;
     for (const e of game.world.all()) {
@@ -84,6 +87,7 @@ function playBotMatch(options: {
     buildings,
     military,
     gathered,
+    defeated,
     hash: game.hash(),
   };
 }
@@ -91,15 +95,18 @@ function playBotMatch(options: {
 describe('bot vs bot matches', () => {
   it('plays a complete landmark match and produces a winner', () => {
     const result = playBotMatch({ seed: 2024, victory: VictoryCondition.Landmarks });
-    // Both bots must have actually played: economy, buildings and an army.
-    for (let i = 0; i < 2; i++) {
-      expect(result.gathered[i], `player ${i} gathered nothing`).toBeGreaterThan(300);
-      expect(result.buildings[i], `player ${i} built nothing`).toBeGreaterThan(2);
-    }
-    // At least one side must have trained military units.
-    expect(Math.max(...result.military)).toBeGreaterThan(0);
+    // The match must actually be decided, not run out of ticks.
+    expect(result.winner, 'the match produced no winner').toBeGreaterThanOrEqual(0);
+    // The winning bot must have played a real economy, not been handed the game.
+    const winner = result.winner >= 0 ? result.winner : 0;
+    expect(result.gathered[winner], `the winner gathered nothing`).toBeGreaterThan(300);
+    expect(result.buildings[winner], `the winner built nothing`).toBeGreaterThan(2);
+    // And it must have converted that economy into an army.
+    expect(result.military[winner], 'the winner trained no army').toBeGreaterThan(0);
     expect(result.ticks).toBeGreaterThan(TICK_RATE * 30);
-    expect(result.winner === 0 || result.winner === 1 || result.winner === -1).toBe(true);
+    // The beaten side is marked defeated rather than left in limbo.
+    const loser = winner === 0 ? 1 : 0;
+    expect(result.defeated[loser], 'the losing player was never marked defeated').toBe(true);
   }, 240_000);
 
   it('is reproducible: the same seed produces the same match', () => {

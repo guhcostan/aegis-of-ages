@@ -56,8 +56,11 @@ export function movementSystem(world: World): void {
       if (e.stuckTicks > 60) {
         e.stuckTicks = 0;
         e.lastGoalDist = goalDist;
-        const escaped = unstick(world, e);
-        if (!escaped) {
+        // First try to step off blocked ground, then to reposition next to the
+        // goal when a building cluster has sealed the destination off. Without
+        // the second case a walled-in farm makes its workers loop forever and
+        // the whole base economy freezes.
+        if (!unstick(world, e) && !repositionNearGoal(world, e)) {
           // Genuinely unreachable: give up on this goal rather than spinning.
           e.hasGoal = false;
           e.path = [];
@@ -183,6 +186,47 @@ function unstick(world: World, e: Entity): boolean {
         if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
         const x = tx + dx;
         const y = ty + dy;
+        if (x < 0 || y < 0 || x >= width || y >= height) continue;
+        if (passable[y * width + x] !== 1) continue;
+        e.x = (x << 10) + 512;
+        e.y = (y << 10) + 512;
+        e.path = [];
+        e.pathIndex = 0;
+        e.hasGoal = false;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Maximum distance, in tiles, over which a stuck unit may be repositioned.
+ * Keeping it small makes this a local nudge rather than a teleport, so units
+ * cannot use it to cross walls or reach across the map.
+ */
+const REPOSITION_RANGE_TILES = 12;
+
+/**
+ * Place a stuck unit on the nearest walkable tile to its goal, but only when
+ * the goal is close by. Returns false when the unit is not eligible.
+ */
+function repositionNearGoal(world: World, e: Entity): boolean {
+  const { width, height, passable } = world.map;
+  const gx = e.goalX >> 10;
+  const gy = e.goalY >> 10;
+  const ux = e.x >> 10;
+  const uy = e.y >> 10;
+  const dx = Math.abs(gx - ux);
+  const dy = Math.abs(gy - uy);
+  if (dx > REPOSITION_RANGE_TILES || dy > REPOSITION_RANGE_TILES) return false;
+
+  for (let r = 1; r <= 4; r++) {
+    for (let oy = -r; oy <= r; oy++) {
+      for (let ox = -r; ox <= r; ox++) {
+        if (Math.abs(ox) !== r && Math.abs(oy) !== r) continue;
+        const x = gx + ox;
+        const y = gy + oy;
         if (x < 0 || y < 0 || x >= width || y >= height) continue;
         if (passable[y * width + x] !== 1) continue;
         e.x = (x << 10) + 512;

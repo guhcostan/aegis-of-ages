@@ -36,7 +36,14 @@ export function victorySystem(world: World, condition: VictoryCondition): MatchR
     let units = 0;
     let buildings = 0;
     let landmarks = 0;
-    let everHadLandmark = player.landmarks.length > 0;
+    // A Town Center is the only building that trains villagers, so without one
+    // (or without any unit at all) a player cannot rebuild an economy. Without
+    // this rule a player reduced to a few houses sits there forever and the
+    // match never ends.
+    let canProduceVillagers = false;
+    // Sticky flag: the current landmark list is already empty by the time the
+    // last one is destroyed, so it cannot be used to detect the loss.
+    let everHadLandmark = player.hadLandmark;
     for (let i = 0; i < world.entities.length; i++) {
       const e = world.entities[i];
       if (!e || !e.alive || e.owner !== player.id) continue;
@@ -48,11 +55,19 @@ export function victorySystem(world: World, condition: VictoryCondition): MatchR
           landmarks++;
           everHadLandmark = true;
         }
+        if (def && e.construction >= 1000 && def.trains.includes('villager')) {
+          canProduceVillagers = true;
+        }
       }
     }
     if (units === 0 && buildings === 0) {
       player.defeated = true;
       result.reason = `${player.name} has nothing left`;
+      continue;
+    }
+    if (units === 0 && !canProduceVillagers) {
+      player.defeated = true;
+      result.reason = `${player.name} has no army and no way to raise one`;
       continue;
     }
     if (condition === VictoryCondition.Landmarks && everHadLandmark && landmarks === 0) {

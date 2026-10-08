@@ -50,7 +50,7 @@ export const BOT_PROFILES: BotProfile[] = [
   {
     thinkInterval: 40,
     villagerTarget: 14,
-    attackThreshold: 16,
+    attackThreshold: 10,
     foodShare: 45,
     woodShare: 30,
     goldShare: 20,
@@ -59,8 +59,8 @@ export const BOT_PROFILES: BotProfile[] = [
   },
   {
     thinkInterval: 24,
-    villagerTarget: 24,
-    attackThreshold: 14,
+    villagerTarget: 22,
+    attackThreshold: 8,
     foodShare: 42,
     woodShare: 28,
     goldShare: 24,
@@ -69,8 +69,8 @@ export const BOT_PROFILES: BotProfile[] = [
   },
   {
     thinkInterval: 16,
-    villagerTarget: 34,
-    attackThreshold: 12,
+    villagerTarget: 30,
+    attackThreshold: 6,
     foodShare: 40,
     woodShare: 26,
     goldShare: 26,
@@ -124,6 +124,10 @@ export class BotController {
   private homeY = 0;
   /** Ticks until the next attack push, so attacks arrive in waves. */
   private attackCooldown = 0;
+  /** Ticks before the bot may divert its army to a sacred site again. */
+  private siteCooldown = 0;
+  /** Last known construction progress per site, to detect stalled builds. */
+  private readonly siteProgress = new Map<number, { construction: number; since: number }>();
   private attacking = false;
   private lastThink = -999;
 
@@ -182,12 +186,24 @@ export class BotController {
     if (townCenter && !this.bankingForAgeUp()) {
       const reserved = reservedPopulation(w, this.playerId);
       const canGrow = player.pop + reserved + 1 <= player.popCap;
-      const wantsVillagers = total < this.profile.villagerTarget && player.popCap >= 10;
+      // Grow into the age rather than sprinting to the final target: a Dark Age
+      // bot that spends every scrap of food on villagers never fields a soldier
+      // and never ages up, which is exactly how matches used to stalemate.
+      const ageCap = [12, 18, 24, 30][player.age] ?? 24;
+      const villagerGoal = Math.min(this.profile.villagerTarget, ageCap);
+      const wantsVillagers = total < villagerGoal && player.popCap >= 10;
       // Keep a food floor once the army matters, otherwise an endless villager
-      // queue eats every scrap of food and no soldier is ever trained.
-      const foodFloor = player.age >= Age.Feudal ? 180 : 0;
+      // queue eats every scrap of food and no soldier is ever trained. A small
+      // workforce is the exception: if raiding has cut the economy down, every
+      // spare scrap of food goes into replacing villagers, or the bot never
+      // recovers and the match stalls forever.
+      // Always keep enough food for one soldier, at every age.
+      const foodFloor = player.age >= Age.Feudal ? 150 : 60;
       const hasFood = player.resources.food >= 50 + foodFloor;
-      if (canGrow && wantsVillagers && hasFood && this.canAffordUnit('villager')) {
+      // Once there is somewhere to train an army, a bot with almost no soldiers
+      // must put its food into soldiers rather than endlessly into villagers.
+      const needsArmy = this.hasProductionBuilding() && this.armySize() < 8 && total >= 10;
+      if (canGrow && wantsVillagers && hasFood && !needsArmy && this.canAffordUnit('villager')) {
         this.send({
           type: CommandType.Train,
           player: this.playerId,
@@ -225,6 +241,10 @@ export class BotController {
         if (assigned >= 8) break;
       }
     }
+
+    // Evacuate civilians: villagers caught in the open are free kills, and a
+    // dead economy cannot field an army.
+    this.evacuateVillagers();
 
     // Rescue stalled sites: a building placed with nobody on it is wasted wood.
     this.finishConstructionSites();
@@ -370,7 +390,23 @@ export class BotController {
     for (const e of this.world.all()) {
       if (e.owner !== this.playerId || e.kind !== EntityKind.Building) continue;
       if (e.construction >= 1000) continue;
-      if (e.builders > 0) continue;
+
+      // A site whose progress has not moved for a minute and a half is not
+      // reachable: cancel it and free the workforce. Without this the rescue
+      // loop kept feeding villagers to a site nobody could reach until the
+      // entire economy was queued up behind one impossible building.
+      const tracked = this.siteProgress.get(e.id);
+      if (!tracked || tracked.construction !== e.construction) {
+        this.siteProgress.set(e.id, { construction: e.construction, since: this.world.tick });
+      } else if (this.world.tick - tracked.since > 20 * 90) {
+        this.cancelSite(e.id);
+        this.siteProgress.delete(e.id);
+        continue;
+      }
+
+      // Someone is already walking to it: builders only counts villagers who
+      // have arrived, so counting that alone re-queued the whole workforce.
+      if (e.builders > 0 || this.villagersHeadingTo(e.id) > 0) continue;
       const villager = this.freeVillagerNear(e.x, e.y);
       if (!villager) continue;
       this.send({
@@ -381,6 +417,80 @@ export class BotController {
         tileX: e.x >> 10,
         tileY: e.y >> 10,
         queue: false,
+      });
+    }
+  }
+
+  /**
+   * Abandon an unreachable site. The building is removed and every villager
+   * building it goes back to work; the simulation refunds nothing, which is a
+   * deliberate cost of a bad placement.
+   */
+  private cancelSite(siteId: number): void {
+    const site = this.world.get(siteId);
+    if (!site) return;
+    for (const e of this.world.all()) {
+      if (e.owner !== this.playerId || e.kind !== EntityKind.Unit) continue;
+      const order = e.orders[0];
+      if (order && order.kind === OrderKind.Build && order.target === siteId) {
+        e.orders.length = 0;
+        e.build.site = 0;
+      }
+    }
+    this.world.destroyEntity(siteId);
+  }
+
+  /** Villagers with a Build order targeting this site, arrived or not. */
+  private villagersHeadingTo(siteId: number): number {
+    let n = 0;
+    for (const e of this.world.all()) {
+      if (e.owner !== this.playerId || e.kind !== EntityKind.Unit) continue;
+      const order = e.orders[0];
+      if (order && order.kind === OrderKind.Build && order.target === siteId) n++;
+    }
+    return n;
+  }
+
+  /**
+   * Send villagers inside a Town Center or Keep when enemy soldiers get close.
+   * The army is the answer to a raid, but unarmed villagers must not stand in
+   * the open waiting to be killed.
+   */
+  private evacuateVillagers(): void {
+    const raiders: Entity[] = [];
+    for (const e of this.world.all()) {
+      if (e.owner === this.playerId || e.owner < 0) continue;
+      if (e.kind !== EntityKind.Unit) continue;
+      const def = UNITS[e.def];
+      if (!def || def.role === UnitRole.Worker) continue;
+      const dx = e.x - this.homeX;
+      const dy = e.y - this.homeY;
+      if (dx * dx + dy * dy < (18 * FP_ONE) * (18 * FP_ONE)) raiders.push(e);
+    }
+    if (raiders.length === 0) return;
+
+    const shelter = this.findBuilding('town_center') ?? this.findBuilding('keep');
+    if (!shelter) return;
+
+    for (const e of this.world.all()) {
+      if (e.owner !== this.playerId || e.kind !== EntityKind.Unit) continue;
+      const def = UNITS[e.def];
+      if (!def || def.role !== UnitRole.Worker) continue;
+      // Already safe.
+      if (e.inside !== 0) continue;
+      let nearest = Infinity;
+      for (const r of raiders) {
+        const dx = r.x - e.x;
+        const dy = r.y - e.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < nearest) nearest = d2;
+      }
+      if (nearest > (10 * FP_ONE) * (10 * FP_ONE)) continue;
+      this.send({
+        type: CommandType.Garrison,
+        player: this.playerId,
+        units: [e.id],
+        building: shelter.id,
       });
     }
   }
@@ -527,19 +637,27 @@ export class BotController {
       return false;
     }
 
-    const spot = this.findBuildSpot(defId, def.width, def.height);
-    if (!spot) return false;
-
-    let builders = this.idleVillagers()
-      .slice(0, 2)
-      .map((e) => e.id);
-    if (builders.length === 0) {
-      // Pull the closest villager that is NOT already building, otherwise the
-      // bot would keep abandoning half-finished sites.
-      const closest = this.freeVillagerNear(spot.x << 10, spot.y << 10);
-      if (closest) builders = [closest.id];
+    // Pick the worker first, then choose a spot that worker can actually walk
+    // to. Placing a building in a sealed pocket used to strand every villager
+    // sent to build it and freeze the whole economy.
+    const candidates = this.idleVillagers();
+    let builders: number[] = candidates.slice(0, 2).map((e) => e.id);
+    let reference: Entity | null = candidates[0] ?? null;
+    if (!reference) {
+      reference = this.freeVillagerNear(this.homeX, this.homeY);
+      if (reference) builders = [reference.id];
+      else {
+        const anyWorker = this.closestFreeVillagerAnywhere();
+        if (anyWorker) {
+          reference = anyWorker;
+          builders = [anyWorker.id];
+        }
+      }
     }
-    if (builders.length === 0) return false;
+    if (!reference || builders.length === 0) return false;
+
+    const spot = this.findBuildSpot(defId, def.width, def.height, reference);
+    if (!spot) return false;
 
     this.send({
       type: CommandType.Build,
@@ -553,12 +671,28 @@ export class BotController {
     return true;
   }
 
-  /** Spiral search for a legal footprint near the base. */
-  private findBuildSpot(defId: string, width: number, height: number): { x: number; y: number } | null {
+  /** Closest worker that is not currently building, wherever it is. */
+  private closestFreeVillagerAnywhere(): Entity | null {
+    return this.freeVillagerNear(this.homeX, this.homeY);
+  }
+
+  /**
+   * Spiral search for a legal footprint near the base that the given worker can
+   * actually reach. Reachability is checked with the same pathfinder the
+   * simulation uses, so an accepted site is always buildable.
+   */
+  private findBuildSpot(
+    defId: string,
+    width: number,
+    height: number,
+    from: Entity,
+  ): { x: number; y: number } | null {
     const w = this.world;
     const map = w.map;
     const baseX = this.homeX >> 10;
     const baseY = this.homeY >> 10;
+    const fromX = from.x >> 10;
+    const fromY = from.y >> 10;
     for (let r = 3; r < 26; r += 1) {
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
@@ -567,11 +701,13 @@ export class BotController {
           const y = baseY + dy;
           if (x < 1 || y < 1) continue;
           if (x + width >= map.width || y + height >= map.height) continue;
-          if (w.canPlaceBuilding(defId, x, y)) {
-            // Do not wall ourselves in: keep the footprint clear of the TC ring.
-            if (Math.abs(dx) < 3 && Math.abs(dy) < 3) continue;
-            return { x, y };
-          }
+          // Do not wall ourselves in: keep the footprint clear of the TC ring.
+          if (Math.abs(dx) < 3 && Math.abs(dy) < 3) continue;
+          if (!w.canPlaceBuilding(defId, x, y)) continue;
+          // The worker must be able to walk to the tile just outside it.
+          const path = w.pathfinder.findPath(fromX, fromY, x, y, 1, 4000, this.playerId);
+          if (!path) continue;
+          return { x, y };
         }
       }
     }
@@ -822,9 +958,16 @@ export class BotController {
       return;
     }
 
-    // Sacred sites, when the victory condition or the profile calls for it.
+    // Sacred sites. This branch used to run before the attack logic on every
+    // decision, so the army marched to a site and camped there forever: both
+    // bots stalemated and matches never ended. Now it only takes precedence when
+    // the sacred-site victory is actually the win condition, or when the bot has
+    // enough of an army to spare a detachment, and never twice in a row.
     const objective = this.sacredSiteTarget();
-    if (objective && army.length >= 6) {
+    const siteIsTheWin = this.game.config.victory === VictoryCondition.SacredSites;
+    const canSpare = army.length >= this.profile.attackThreshold * 2;
+    if (objective && this.siteCooldown <= 0 && (siteIsTheWin || (this.profile.contestsSites && canSpare))) {
+      this.siteCooldown = 900;
       for (const u of army) {
         this.send({
           type: CommandType.AttackMove,
@@ -837,9 +980,14 @@ export class BotController {
       }
       return;
     }
+    if (this.siteCooldown > 0) this.siteCooldown--;
 
     const threshold = this.profile.attackThreshold;
-    if (!this.attacking && army.length >= threshold && this.attackCooldown <= 0) {
+    // Commit when the army is big enough, or when the enemy has almost nothing
+    // and this is the moment to finish the game.
+    const enemyArmy = this.enemyArmySize();
+    const canOverrun = army.length >= 4 && enemyArmy <= army.length / 2;
+    if (!this.attacking && (army.length >= threshold || canOverrun) && this.attackCooldown <= 0) {
       this.attacking = true;
       this.attackCooldown = 600;
     }
@@ -848,7 +996,14 @@ export class BotController {
     if (this.attacking) {
       const target = this.findAttackTarget();
       if (!target) {
+        // Nothing left to conquer: the enemy is beaten.
         this.attacking = false;
+        return;
+      }
+      // If the army has been ground down, break off and rebuild.
+      if (army.length < Math.max(3, Math.floor(threshold / 2))) {
+        this.attacking = false;
+        this.attackCooldown = 300;
         return;
       }
       for (const u of army) {
@@ -884,6 +1039,42 @@ export class BotController {
         }
       }
     }
+  }
+
+  /** True when the bot owns at least one finished military production building. */
+  private hasProductionBuilding(): boolean {
+    for (const e of this.world.all()) {
+      if (e.owner !== this.playerId || e.kind !== EntityKind.Building) continue;
+      if (e.construction < 1000) continue;
+      const def = BUILDINGS[e.def];
+      if (def?.kind === BuildingKind.Production) return true;
+    }
+    return false;
+  }
+
+  /** Number of living soldiers the bot owns. */
+  private armySize(): number {
+    let n = 0;
+    for (const e of this.world.all()) {
+      if (e.owner !== this.playerId || e.kind !== EntityKind.Unit) continue;
+      const def = UNITS[e.def];
+      if (!def) continue;
+      if (def.role === UnitRole.Military || def.role === UnitRole.Siege) n++;
+    }
+    return n;
+  }
+
+  /** Count of living enemy soldiers, used to judge when to commit. */
+  private enemyArmySize(): number {
+    let n = 0;
+    for (const e of this.world.all()) {
+      if (e.owner === this.playerId || e.owner < 0) continue;
+      if (e.kind !== EntityKind.Unit) continue;
+      const def = UNITS[e.def];
+      if (!def) continue;
+      if (def.role === UnitRole.Military || def.role === UnitRole.Siege) n++;
+    }
+    return n;
   }
 
   /** Nearest enemy inside our defensive radius. */

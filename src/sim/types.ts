@@ -444,8 +444,14 @@ export interface PlayerState {
   techs: Set<string>;
   /** Techs currently being researched: defId -> ticks remaining. */
   researching: Map<string, { remaining: number; total: number; building: number }>;
-  /** Landmarks constructed (entity ids), used for the landmark victory. */
+  /** Landmarks currently standing (entity ids), used for the landmark victory. */
   landmarks: number[];
+  /**
+   * True once this player has ever completed a landmark. Sticky on purpose:
+   * the landmark victory must trigger when the last one falls, and the current
+   * list is empty by then, so it cannot be derived from `landmarks`.
+   */
+  hadLandmark: boolean;
   defeated: boolean;
   /** Ticks spent holding enough sacred sites. */
   sacredHoldTicks: number;

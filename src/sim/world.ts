@@ -98,6 +98,7 @@ export class World {
       techs: new Set<string>(),
       researching: new Map(),
       landmarks: [],
+      hadLandmark: false,
       defeated: false,
       sacredHoldTicks: 0,
       wonderAt: 0,
@@ -481,8 +482,9 @@ export class World {
     const player = this.players[e.owner];
     if (player) {
       player.stats.buildingsBuilt++;
-      if (def.isLandmark && !player.landmarks.includes(e.id)) {
-        player.landmarks.push(e.id);
+      if (def.isLandmark) {
+        player.hadLandmark = true;
+        if (!player.landmarks.includes(e.id)) player.landmarks.push(e.id);
       }
     }
   }

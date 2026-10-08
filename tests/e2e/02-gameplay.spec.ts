@@ -245,65 +245,103 @@ test.describe('economy and construction', () => {
 });
 
 test.describe('combat', () => {
-  test('the counter triangle works: spears beat knights, knights beat archers', async ({ page }) => {
+  test('the counter triangle works: spears beat knights, knights beat archers', async ({
+    page,
+  }) => {
     const watch = watchConsole(page);
     await loadShell(page);
-    await startMatch(page, { seed: 81, mapSize: 'small', revealMap: true });
+    await startMatch(page, { seed: 81, mapSize: 'small', revealMap: true, startingResources: 'veryhigh' });
 
-    const outcome = await page.evaluate(async () => {
+    // AoE IV counters are about equal RESOURCES, not equal numbers: a spearman
+    // costs 80 and a knight costs 240, so three spearmen per knight is the fair
+    // trade. The two duels are placed far apart so they cannot interfere.
+    const outcome = await page.evaluate(() => {
       const api = window.__game;
       if (!api) return null;
       const snapshot = api.state();
-      const map = { w: 64, h: 64 };
-      void map;
-      // Spawn two duels far from each other on open ground.
-      const baseX = (snapshot.entities.find((e) => e.def === 'town_center' && e.owner === 0)?.x ?? 0) + 20 * 1024;
-      const baseY = (snapshot.entities.find((e) => e.def === 'town_center' && e.owner === 0)?.y ?? 0) + 20 * 1024;
-      // Duel A: player 0 spearmen vs player 1 knights.
-      api.spawn('spearman', 4, 0, baseX, baseY);
-      api.spawn('knight', 4, 1, baseX + 2 * 1024, baseY);
-      // Duel B: player 0 archers vs player 1 knights.
-      api.spawn('archer', 4, 0, baseX + 30 * 1024, baseY);
-      api.spawn('knight', 4, 1, baseX + 32 * 1024, baseY);
+      const tc = snapshot.entities.find((e) => e.def === 'town_center' && e.owner === 0);
+      if (!tc) return null;
+      const homeX = tc.x;
+      const homeY = tc.y;
 
-      const before = api.state();
-      const count = (s: typeof before, def: string, owner: number) =>
-        s?.entities.filter((e) => e.def === def && e.owner === owner).length ?? 0;
-      const initial = {
-        spearmen: count(before, 'spearman', 0),
-        archers: count(before, 'archer', 0),
-        knights: count(before, 'knight', 1),
+      // Duel A: 12 spearmen (960 resources) against 4 knights (960 resources).
+      const ax = homeX + 30 * 1024;
+      const ay = homeY - 20 * 1024;
+      api.spawn('spearman', 12, 0, ax, ay);
+      api.spawn('knight', 4, 1, ax + 4 * 1024, ay);
+      // Duel B: 8 archers (640) against 3 knights (720).
+      const bx = homeX + 30 * 1024;
+      const by = homeY + 30 * 1024;
+      api.spawn('archer', 8, 0, bx, by);
+      api.spawn('knight', 3, 1, bx + 4 * 1024, by);
+
+      const count = (def: string, owner: number): number =>
+        api.state().entities.filter((e) => e.def === def && e.owner === owner).length;
+      const before = {
+        spearmen: count('spearman', 0),
+        archers: count('archer', 0),
+        knights: count('knight', 1),
       };
 
-      // Order every unit to attack-move into the enemy.
-      for (const e of before?.entities ?? []) {
-        if (e.owner === 0 && (e.def === 'spearman' || e.def === 'archer')) {
-          api.command({ type: 3, player: 0, units: [e.id], x: e.x + 4 * 1024, y: e.y, queue: false });
+      // Every unit is ordered onto its NEAREST enemy. Naming a specific unit
+      // type pulled the knights in duel B across the map onto a spearman, so
+      // they never fought the archers standing next to them.
+      const order = (): void => {
+        const s2 = api.state();
+        const soldiers = s2.entities.filter(
+          (e) =>
+            e.kind === 1 &&
+            (e.owner === 0 || e.owner === 1) &&
+            ['spearman', 'archer', 'knight'].includes(e.def),
+        );
+        for (const unit of soldiers) {
+          let best: (typeof soldiers)[number] | null = null;
+          let bestD = Number.MAX_SAFE_INTEGER;
+          for (const other of soldiers) {
+            if (other.owner === unit.owner) continue;
+            const dx = other.x - unit.x;
+            const dy = other.y - unit.y;
+            const d = dx * dx + dy * dy;
+            if (d < bestD) {
+              bestD = d;
+              best = other;
+            }
+          }
+          if (best) {
+            api.command({
+              type: 2,
+              player: unit.owner,
+              units: [unit.id],
+              target: best.id,
+              queue: false,
+            });
+          }
         }
-        if (e.owner === 1 && e.def === 'knight') {
-          api.command({ type: 3, player: 1, units: [e.id], x: e.x - 4 * 1024, y: e.y, queue: false });
-        }
+      };
+
+      for (let round = 0; round < 60; round++) {
+        order();
+        api.step(20);
       }
-      for (let i = 0; i < 60; i++) api.step(20);
-      const after = api.state();
+
       return {
-        initial,
-        spearmenLeft: count(after, 'spearman', 0),
-        knightsLeft: count(after, 'knight', 1),
-        archersLeft: count(after, 'archer', 0),
+        before,
+        after: {
+          spearmen: count('spearman', 0),
+          archers: count('archer', 0),
+          knights: count('knight', 1),
+        },
       };
     });
 
     expect(outcome).toBeTruthy();
-    // Both duels must produce casualties: spearmen and archers grind down the
-    // knights, and the knights kill something back.
-    const knightsLost = (outcome?.initial.knights ?? 0) - (outcome?.knightsLeft ?? 0);
-    const infantryLost =
-      (outcome?.initial.spearmen ?? 0) +
-      (outcome?.initial.archers ?? 0) -
-      ((outcome?.spearmenLeft ?? 0) + (outcome?.archersLeft ?? 0));
-    expect(knightsLost, 'the knights took no losses at all').toBeGreaterThan(0);
-    expect(infantryLost, 'the infantry took no losses at all').toBeGreaterThan(0);
+    const knightsLost = (outcome?.before.knights ?? 0) - (outcome?.after.knights ?? 0);
+    const spearmenLost = (outcome?.before.spearmen ?? 0) - (outcome?.after.spearmen ?? 0);
+    const archersLost = (outcome?.before.archers ?? 0) - (outcome?.after.archers ?? 0);
+    // Spearmen must trade into the knights, and cavalry must run down archers.
+    expect(knightsLost, 'spearmen killed no knights: the anti-cavalry bonus is missing').toBeGreaterThan(0);
+    expect(spearmenLost, 'spearmen took no losses at all').toBeGreaterThan(0);
+    expect(archersLost, 'cavalry killed no archers: the anti-ranged bonus is missing').toBeGreaterThan(0);
     expectNoErrors(watch);
   });
 

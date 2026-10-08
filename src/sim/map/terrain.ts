@@ -19,6 +19,13 @@ export const enum Terrain {
   Farm = 6,
 }
 
+/**
+ * Minimum number of sacred sites a map must spawn, matching
+ * SACRED_SITE_VICTORY_COUNT: fewer than this and the sacred-site victory is
+ * impossible to achieve.
+ */
+const MIN_SACRED_SITES = 3;
+
 /** Elevation is stored in twentieths of a tile, integer. */
 export const ELEV_UNIT = 20;
 
@@ -342,19 +349,45 @@ export function generateMap(opts: MapGenOptions): GeneratedMap {
   // --- Sacred sites and relic spots, spread around the map. ---
   const sacredSiteSpots: GridPoint[] = [];
   const relicSpots: GridPoint[] = [];
-  const siteCount = clamp(count + 2, 3, 6);
+  // The sacred-site victory needs MIN_SACRED_SITES sites held at once, so the
+  // generator must always place at least that many: a map that spawns two sites
+  // makes that victory condition impossible. Candidates that land too close to a
+  // starting base are pushed outward instead of being discarded.
+  const siteCount = clamp(count + 2, MIN_SACRED_SITES, 6);
   for (let n = 0; n < siteCount; n++) {
     const a = Math.trunc((n * 256) / siteCount) + 24;
-    const r = Math.trunc((landRadius * 60) / 100);
-    const spot = findNearestClear(
-      passable,
-      width,
-      height,
-      cx + Math.trunc((r * cosTable(a)) / 1024),
-      cy + Math.trunc((r * sinTable(a)) / 1024),
-      18,
-    );
-    if (!nearAnyStart(spot.x, spot.y, starts, 5)) sacredSiteSpots.push(spot);
+    let placed = false;
+    for (let attempt = 0; attempt < 6 && !placed; attempt++) {
+      // Each retry pushes the ring further out, away from the starting bases.
+      const r = Math.trunc((landRadius * (60 + attempt * 6)) / 100);
+      const spot = findNearestClear(
+        passable,
+        width,
+        height,
+        cx + Math.trunc((r * cosTable(a)) / 1024),
+        cy + Math.trunc((r * sinTable(a)) / 1024),
+        18,
+      );
+      if (nearAnyStart(spot.x, spot.y, starts, 4)) continue;
+      if (sacredSiteSpots.some((s) => Math.abs(s.x - spot.x) < 4 && Math.abs(s.y - spot.y) < 4)) {
+        continue;
+      }
+      sacredSiteSpots.push(spot);
+      placed = true;
+    }
+    if (!placed) {
+      // Last resort: keep it anyway rather than shipping an unwinnable map.
+      const r = Math.trunc((landRadius * 75) / 100);
+      const spot = findNearestClear(
+        passable,
+        width,
+        height,
+        cx + Math.trunc((r * cosTable(a)) / 1024),
+        cy + Math.trunc((r * sinTable(a)) / 1024),
+        18,
+      );
+      sacredSiteSpots.push(spot);
+    }
   }
   for (let n = 0; n < 6; n++) {
     const px = rng.nextInt(width);

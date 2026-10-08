@@ -935,3 +935,73 @@ reference defaults from `docs/research/interface-and-match-setup.md` §2 and
 No asset, logo, sound or product name from the reference game is copied into this project;
 only factual game statistics are used, and every visual and textual element of Aegis of Ages
 is generated in code or written for this project.
+
+## 8. Hardening round — verified behaviour and new deviations (2026-10-08)
+
+This section records what the acceptance suite proved about the live build, and the deviations
+that were introduced or made explicit while fixing the bugs it found. It supersedes anything
+above that contradicts it.
+
+### 8.1 Verified by running, not by reading
+
+* **Determinism.** Same seed and command stream produce the same FNV-1a state digest, in Node
+  (`tests/unit/match.test.ts`) and in the browser (`tests/e2e/02-gameplay.spec.ts`). Two runs at
+  seed 555 matched exactly; seed 556 differed.
+* **Map guarantees.** Across 4 map sizes x 2 player counts x 25 seeds, every generated map has
+  at least 4 sacred sites, which is what the sacred-site victory needs
+  (`SACRED_SITE_VICTORY_COUNT = 3`).
+* **Build times.** A building takes `def.buildTime` seconds with one villager, and the
+  multi-villager factor is the researched `3 / (N + 2)`: two villagers finish in 75% of the
+  time, ten in 25%.
+* **Counters.** With equal resources (12 spearmen vs 4 knights; 8 archers vs 3 knights),
+  spearmen inflict losses on knights and cavalry kills archers. Verified as an e2e duel.
+* **Victory conditions.** All three conditions reach a victory screen with no console errors:
+  landmarks (raze every enemy landmark with siege), sacred sites (hold the sites for the
+  countdown), wonder (build a Wonder and hold it for the countdown).
+* **Performance.** With 200+ units on screen the renderer reports 728 live instances in 23 draw
+  calls. The measured frame rate in CI is low because the test browser uses the SwiftShader
+  software rasteriser; the hardware-independent evidence is the instance and draw-call count
+  plus the renderer's own per-frame CPU cost recorded by the builder (0.68 ms/frame).
+
+### 8.2 Deviations introduced or clarified this round
+
+1. **Torch attacks are ordinary melee damage.** A melee attack against a building uses the
+   attacker's melee attack value against a small positive building melee armour, instead of a
+   separate per-age torch damage (10/13/17/21) against fire armour. Consequence: killing a
+   7000 HP capital Town Center with cavalry alone is very slow, so the landmark acceptance test
+   brings trebuchets, which is also how the original is played.
+2. **Siege ranged resistance is applied before armour, multiplicatively.** Ram 95%, siege tower
+   95%, mangonel 85%, trebuchet 80%, springald 55%, matching the researched values.
+3. **Only three bot difficulties.** The original exposes seven AI levels. Easy, Intermediate and
+   Hard differ in reaction interval, villager target, army size before attacking and whether the
+   bot expands or contests sacred sites. No difficulty receives free resources.
+4. **Bots are honest about resources.** In the original the top three AI levels receive gathering
+   multipliers. Ours never do, which is why prolonged Standard-resource games can become
+   economic rather than decisive.
+5. **Area auras are global modifiers.** English Mill influence and Network of Castles apply to
+   the whole economy/army rather than to buildings and units inside a radius.
+6. **Trade gold is linear in distance.** `TRADE_BASE + TRADE_PER_TILE x roundTripTiles` rather
+   than the original's quadratic curve, so very long routes underpay.
+7. **Landmark loss is sticky.** A player is defeated under the landmark condition when every
+   landmark they ever completed has been destroyed. The flag is sticky on purpose: the live list
+   of landmarks is empty by the time the last one falls.
+8. **Sacred-site victory requires 3 sites held for 5 minutes** (`SACRED_SITE_VICTORY_COUNT`,
+   `SACRED_SITE_VICTORY_TICKS`) rather than "all sites for 10 minutes".
+9. **Gates are owner-passable, everything else is fully blocking.** In the original most
+   buildings leave a passable sliver; ours block their whole footprint. To stop that from
+   stranding units, movement has a progress watchdog that releases an unreachable goal and
+   repositions a sealed-in unit to a nearby walkable tile (bounded to 12 tiles, so it cannot be
+   used to cross the map or climb walls).
+10. **Farms are unlimited and never deplete.** They are destroyed, not exhausted, and only one
+    villager can work each one.
+11. **Unit tiers are technologies.** The Regular/Veteran/Elite ladder is expressed as technology
+    deltas, exactly as the original does it: advancing an age alone does not upgrade a unit.
+12. **Wall and gate segments occupy exactly one tile.** The original places walls freeform.
+
+### 8.3 Acceptance-test conventions
+
+The e2e suite starts matches paused (`startPaused`) and advances them with explicit
+`step(ticks)` calls. Without this, the animation-frame loop advances the simulation in parallel
+with the test and tick-accurate assertions (determinism, gathered amounts) become flaky. Full
+match scenarios use the lobby's **Very High** starting preset so a decisive result fits inside
+the test budget; bot-vs-bot with standard resources is proven separately in the unit suite.

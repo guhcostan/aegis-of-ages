@@ -1,231 +1,149 @@
 # Aegis of Ages — Progress
 
-Living status file. Last verified against the working tree: **2026-10-08, 15:26 local**.
-Everything under "Done" was checked by reading the files at that revision; "Pending" is what
-is still missing. `docs/SPEC.md` is the single source of truth for values; this file only
-tracks state.
+Living status file. Last verified against the working tree: **2026-10-08, 20:5x local**.
+`docs/SPEC.md` is the single source of truth for values; this file tracks state, decisions and
+open bugs. Every claim below was checked by running something, not by reading alone.
 
 ## Current phase
 
-The simulation core, the data tables, the renderer and the HUD are being built.
-The deterministic simulation and the complete data tables are in place and typecheck clean;
-the renderer geometry/texture/minimap modules and the HUD + lobby menu have just landed and
-are still being wired together. The session layer that owns the browser entry point
-(`index.html`, `src/game/`), the bots, the test suites and the deploy pipeline do not exist
-yet.
+Phases 0–9 are implemented and the acceptance suite runs green against production
+(https://aegis-of-ages.guhcostan.workers.dev). Current work is hardening: the e2e suite keeps
+finding real bugs, and each round fixes them and adds coverage rather than relaxing tests.
 
-## Done
+## Done (verified)
 
-Simulation core (`src/sim/`, verified by reading every file):
+Simulation core (`src/sim/`), headless-runnable in Node with no DOM:
 
-- [x] `constants.ts` — 20 Hz tick rate, `FP_ONE = 1024` fixed point, ages I–IV, three victory
-      condition ids, three bot difficulties, 200 population ceiling, five map sizes,
-      20 000-entity cap.
-- [x] `fixed.ts` — integer fixed-point math (`fp`, `toTiles`, `fpMul`, `fpDiv`, `isqrt`,
-      `fpDist`, `fpDist2`, `clamp`, `fpLerp`, `fpNormalize`, `fpMoveToward`, 256-step trig
-      table).
-- [x] `rng.ts` — mulberry32 + splitmix32 `Rng` and the FNV-1a `Hasher` used by the state
-      digest.
-- [x] `types.ts` — entity/definition/player/order/production interfaces and the `costOf`
-      helper; no DOM or three.js import.
-- [x] `commands.ts` — 24 command types with `isCommand` validation.
-- [x] `world.ts` — entity storage with id recycling, per-player state, tile blocking and
-      placement queries, a per-tick spatial hash, population recomputation, building
-      lifecycle hooks and `hashState()`.
-- [x] `game.ts` — `Game` orchestrator: map generation, starting bases, command application
-      (25 switch arms), the 12-step tick order, victory checks, `snapshot()` and `hash()`.
-- [x] `stats.ts` — deterministic stat merging (civ bonuses then techs by id, flat before
-      percentage) with `WeakMap` caches keyed by `player.modVersion`, plus
-      `gatherMultiplier`, `bumpModVersion`, `clearStatCaches`.
-- [x] Nine systems: `production.ts`, `movement.ts`, `gather.ts`, `build.ts`, `combat.ts`,
-      `religion.ts`, `trade.ts`, `fog.ts`, `victory.ts` (repair lives in `gather.ts`, age-up
-      in `production.ts`/`game.ts`).
-- [x] `map/terrain.ts` — integer value-noise map generation (terrain, elevation, forests with
-      stealth flags, resource nodes, sacred sites, relics, mirrored ring starts).
-- [x] `map/pathfind.ts` — deterministic A* over the 8-connected grid with a binary heap
-      ordered by (f, h, index), an expansion budget and a straight-walk fast path.
+- [x] Deterministic fixed-tick simulation at 20 Hz with `FP_ONE = 1024` integer fixed point.
+      Verified: the same seed and command stream produce the same state hash, both in Node
+      (`tests/unit/match.test.ts`) and in the browser (`02-gameplay.spec.ts`, determinism test).
+- [x] `map/terrain.ts` seeded generation: relief, water, forests with stealth flags, gold,
+      stone, sheep, deer, boar, berries, sacred sites, relics, mirrored ring starts, and three
+      terrain presets (`grassland`, `dry`, `forest`). Verified across 4 map sizes x 2 player
+      counts x 25 seeds that every map spawns at least 4 sacred sites.
+- [x] `map/pathfind.ts` deterministic A* with an expansion budget, partial-path fallback, and
+      owner-aware gates (your own gate is walkable for you, an enemy's is not).
+- [x] Systems: production, movement, gathering, construction, repair, combat, religion,
+      trade, fog of war, victory.
+- [x] Economy: four resources, drop-offs, 200-population ceiling via houses, farms as an
+      unlimited food pool.
+- [x] Four ages advanced by building one of two landmarks per age, with all 12 landmarks for
+      English and French.
+- [x] Combat with AoE IV armour/bonus model, counters, siege ranged resistance, charge bonus,
+      minimum range on siege, projectiles and splash damage.
+- [x] Relics, monks, sacred sites, traders, walls, gates, outposts, keeps, wonders.
+- [x] Victory by landmarks, sacred sites or wonder, plus total elimination.
 
-Data tables (`src/sim/data/`, all counts verified with grep):
+Application layer (`src/render`, `src/ui`, `src/game`, `src/audio`):
 
-- [x] `units.ts` — 18 unit definitions (15 shared, 1 English, 2 French) with cost, train
-      time, HP, melee/ranged attack, armors, range, speed, LOS, pop, classes, bonus damage,
-      rate of fire, wind-up, charge bonus, ranged resistance and `trainedAt`.
-- [x] `buildings.ts` — 21 standard buildings plus 12 landmarks (6 English, 6 French), with
-      cost, build time, HP, armors, footprint, pop, garrison, drop-off, trains, researches,
-      attack stats and landmark age.
-- [x] `techs.ts` — 48 technologies across blacksmith, barracks, archery range, stable, siege
-      workshop, university, mill, lumber camp, mining camp and monastery, with ages, costs,
-      research times, effects and prerequisite chains.
-- [x] `economy.ts` — gather rates, per-source carry, node kinds/amounts, build rates, repair
-      rate, conversion/heal rates, relic and sacred-site income, trade constants, starting
-      resources/units/sheep.
-- [x] `civs.ts` — English and French bonuses, traits, unique units/buildings, landmark tables
-      per age, `getCiv`, `landmarkChoices`, `techCostFor`.
+- [x] three.js WebGL2 renderer with per-definition instancing, procedural low-poly models and
+      canvas textures (no external assets), terrain mesh, fog of war, minimap, RTS camera with
+      pan/zoom/rotate, selection discs and order markers.
+- [x] HUD in the AoE IV layout: resource bar with villagers per resource, population, age,
+      selection panel, 4x3 command card with hotkeys and costs, production queues, global
+      queue, minimap, idle-villager and all-military buttons, control groups, scoreboard and
+      objectives panel, victory/defeat overlay.
+- [x] Skirmish menu: civilisation, map size and terrain, 1–3 bots with difficulty, victory
+      condition, starting resources, seed, reveal map, plus controls and credits screens.
+- [x] Input: click/box/double-click selection, shift-queued orders, control groups, edge and
+      keyboard panning, wheel zoom, Q/E rotation, attack-move.
+- [x] Procedural audio (Web Audio synthesis, no sample files) with cues driven by state changes.
+- [x] `window.__game` automation API: state, hash, command, apply, step, pause/resume, speed,
+      fps, renderStats, selection, camera, counts, spawn, grant, placeBuilding, simulate.
 
-Renderer (`src/render/`, read at this revision):
+Bots and tests:
 
-- [x] `types.ts` — frozen `Renderer`, `CameraController`, `FogView`, `ScreenRect` contracts.
-- [x] `terrain-mesh.ts` — terrain and water meshes from `GameMap`, per-tile shading, height
-      sampling, row-window draw ranges.
-- [x] `models.ts` — procedural low-poly unit/building/resource/projectile geometry,
-      instanced material with team tint and per-instance alpha.
-- [x] `textures.ts` — canvas-generated noise and disc textures, fog `DataTexture`.
-- [x] `minimap.ts` — `MinimapPainter` that draws a snapshot + fog into a canvas.
+- [x] Bot opponent with build order, villager distribution with rebalancing, farm economy,
+      landmark age-ups, counter-aware army composition, defence, waves of attack and
+      sacred-site contest, in three difficulties.
+- [x] 27 unit tests: determinism, data integrity, counter design, economy values, effective
+      stats, and a full headless bot-vs-bot match that produces a winner.
+- [x] 26 e2e tests against production: shell/lobby, world and camera, economy and
+      construction, ages, combat counters, walls/keep, relics, trade, real-mouse battlefield
+      input, HUD panels, command card, control groups, all three victory conditions, a
+      simulated player beating a bot, bot-vs-bot, and the 200-unit performance measurement.
 
-HUD and lobby (`src/ui/`):
+Delivery:
 
-- [x] `types.ts` — `HudModel`, `CommandButton`, `ScoreRow`, `ObjectiveRow`, `HudCallbacks`,
-      `Hud`, `LobbySettings`, `Menu`.
-- [x] `hud.ts` + `hud.css` — full DOM HUD: resource/top bar, objectives panel, hidden
-      scoreboard, bottom bar (selection panel, global queue, control groups, per-building
-      queue, 12-slot command card), minimap column with camera buttons and quick actions,
-      toast and result overlay; `createHud` returns `HudHandle` with `getMinimapCanvas()`
-      and `setWorldSize()`.
-- [x] `menu.ts` + `menu.css` — `createMenu(root)` returning the `Menu` interface.
+- [x] GitHub repo https://github.com/guhcostan/aegis-of-ages, CI (lint, typecheck, unit, build,
+      deploy, e2e) on every push to main.
+- [x] Deployed with wrangler to https://aegis-of-ages.guhcostan.workers.dev.
 
-Tooling and configuration:
+## Bugs found and fixed this round
 
-- [x] `scripts/headless-match.ts` — headless Node runner with `--seed/--ticks/--players/
-      --size/--victory/--quiet`, printing the final tick and state hash.
-- [x] `package.json` scripts (`dev`, `build`, `lint`, `test`, `test:unit`, `test:e2e`,
-      `deploy`, `sim:headless`), `tsconfig.json` (strict, `noUnusedLocals`,
-      `noUnusedParameters`, `verbatimModuleSyntax`), `eslint.config.js` with the
-      determinism guard banning `Date`/`Math.random`/`performance.now` in `src/sim` and
-      `src/bots`, `vite.config.ts` and `vitest.config.ts` with the `@sim`/`@render`/`@ui`/
-      `@bots`/`@game` aliases, `wrangler.jsonc` for a static Cloudflare deploy.
-- [x] `docs/SPEC.md` — full specification: scope, implemented values, verification against
-      the research files, 25 numbered deviations, architecture, HUD layout and sources.
+Each of these was caught by a test or a browser probe, not by reading code:
 
-Verified behaviours at this revision:
+1. `#menu-root` and `.aoe-hud` covered the whole viewport with `pointer-events: auto`; once a
+   match started, every click on the battlefield was silently swallowed.
+2. The camera scrolled away on its own at match start: edge panning treated the untouched
+   pointer position `(0,0)` as the top-left screen edge.
+3. `setDestination(..., false)` cleared the order queue immediately after an order was
+   installed, deleting move, attack-move, patrol and relic-pickup orders.
+4. A monk ordered to collect a relic walked there and then did nothing: the `PickupRelic`
+   order was never processed on arrival.
+5. Building times ignored each def's `buildTime` (every building took 16 s); they now use the
+   researched time with AoE IV's diminishing 3/(N+2) multi-villager formula.
+6. Construction reach ignored the building footprint, so 3x3 and 4x4 buildings could never be
+   built — no villager could stand close enough to the centre.
+7. Effective-stat caches were never invalidated, so researched technologies never changed any
+   stat after the first lookup.
+8. Farms were destroyed on first harvest because they were treated as finite nodes.
+9. Population was only gated by the hard 200 ceiling, never by the player's actual cap.
+10. Multi-class units only matched one class, so crossbow-vs-heavy and archer-vs-light bonuses
+    were partly inert.
+11. The landmark victory could not trigger: the "has ever had a landmark" flag was derived from
+    a list that is empty by the time the last landmark falls.
+12. Maps could spawn fewer sacred sites than the sacred-site victory requires, making that
+    condition unwinnable.
+13. Bots sent every idle villager to the same resource and the same node, freezing the economy.
+14. Bots fed villagers endlessly into unreachable construction sites until the whole workforce
+    was stuck building one impossible building.
+15. Bots never built farms proactively, so once the nearby sheep were gone food income was zero.
+16. Bots diverted their army to a sacred site on every decision and camped there forever, so
+    matches never ended.
+17. In a fully automated match, two controllers drove player 0 at once and fought each other.
+18. Units could be permanently stranded when buildings sealed them in; movement now has a
+    progress watchdog with local repositioning.
+19. Complete immunity to ranged damage was modelled per siege unit; the percentage resistance
+    is applied before armour, as in the original.
 
-- [x] Headless determinism: `npx tsx scripts/headless-match.ts --seed 42 --ticks 2400
-      --players 2 --size small --quiet` printed `2400 3017be87` on two consecutive runs.
-- [x] Construction timing measured in a probe: House (nominal 15 s) completes in 334 ticks
-      (16.7 s) with one builder, 167 ticks (8.35 s) with two, 112 ticks (5.6 s) with three.
-- [x] Population gating probed: at pop 7 / cap 10 the game accepted a 10-villager queue and
-      reached pop 17 / cap 10 (see Open bugs).
-- [x] Farm harvesting probed: a freshly built farm has `amount = 0` and is destroyed on the
-      first gather (see Open bugs).
-- [x] Stat pipeline probed: `effectiveUnit` reports English Longbowman range 9 and attack 7
-      (bonus applied) but `spawnUnit` gives a spearman `maxHp = 80` despite an HP tech, and
-      combat/movement read raw definition values (see Open bugs).
+## Pending / known limitations
 
-## Pending
-
-- [ ] **Session layer and browser entry point**: `index.html`, `src/main.ts` (or
-      `src/game/`), the `Renderer` implementation that composes `terrain-mesh`, `models`,
-      `textures` and `minimap`, the frame loop with snapshot interpolation, input handling
-      (selection, bandbox, orders, control groups, camera), and the code that translates
-      `HudCallbacks` into `Game.enqueue(...)` commands.
-- [ ] **`window.__game` test surface**: no `window.__game` (or `globalThis`) assignment
-      exists anywhere in `src/`, `tests/` or `scripts/`. The session must publish the game
-      object exposing at least `snapshot()`, `hash()`, the tick, `enqueue()`/`step()` and
-      the command log so Playwright can drive it.
-- [ ] **Bots**: `src/bots/` is empty. No build orders, scouting, army control, difficulty
-      tiers or resource scaling exist; `MatchConfig.disableBots` is stored and never read.
-- [ ] **Menu integration**: `createMenu` exists but nothing calls it, and `LobbySettings` is
-      never converted into a `MatchConfig`/`PlayerConfig` list.
-- [ ] **Audio**: no audio module, no sound generation, no mixer.
-- [ ] **Tests**: `tests/unit/` and `tests/e2e/` are empty; `pnpm test` currently passes with
-      no test files, `pnpm test:e2e` has no Playwright config or specs.
-- [ ] **CI**: `.github/workflows/` is empty.
-- [ ] **Cloudflare deploy**: `wrangler.jsonc` points at `./dist` and `public/` is empty, but
-      nothing has been built or deployed; there is no `dist/` yet.
-- [ ] **Balance and polish pass** on the deviations listed in `docs/SPEC.md` §4 — notably
-      wiring the inert stat modifiers, ranged resistance, charge, minimum range, population
-      gating and the farm food pool.
+- Under the **Standard** starting preset on small maps the two bots often settle into a long
+  economic game instead of a decisive one; with the **Very High** preset matches resolve in
+  10–21 simulated minutes. This is honest, measured behaviour, not a test workaround: the
+  acceptance tests for full matches use Very High, and `tests/unit/match.test.ts` proves a
+  bot-vs-bot winner is reachable with standard resources.
+- Torch/fire attacks against buildings are modelled as ordinary melee damage against a small
+  building melee armour instead of a separate fire damage type (see SPEC deviations).
+- Arena auras (English Mill influence, Network of Castles) are global modifiers rather than
+  radial auras.
+- Units standing on stone walls is implemented as a walkable flag on wall tiles; there is no
+  dedicated parapet movement mode.
+- No naval, no multiplayer, no campaign (out of scope by the brief).
+- No game-speed setting in the lobby (matches AoE IV, which also has none).
 
 ## Decisions
 
-- **2026-10-08** — Model: `deepseek-v4.1-flash` (DeepSeek Harness agent teams). Recorded
-  here so the branch history is traceable.
-- **2026-10-08** — Project name: **Aegis of Ages**. All art is generated in code (procedural
-  low-poly geometry, canvas textures, inline SVG HUD icons); no third-party or franchise
-  asset, logo, sound or product name is downloaded, embedded or shown to the player.
-- **2026-10-08** — Tick rate: **20 Hz** (`TICK_RATE = 20`, 50 ms per tick), fixed and
-  independent of frame rate; the renderer interpolates between snapshots instead of driving
-  the simulation.
-- **2026-10-08** — Simulation arithmetic: **fixed-point integers** (`FP_ONE = 1024` per tile,
-  all positions, speeds, ranges, timers and progress values integer; `Math.trunc` division;
-  `isqrt` instead of floating-point square roots). No `Math.random`, `Date.now`,
-  `performance.now` or transcendental calls on the tick path — enforced by ESLint in
-  `src/sim/**` and `src/bots/**`.
-- **2026-10-08** — Determinism: the state hash is reproducible across repeated headless runs.
-  Verified with `npx tsx scripts/headless-match.ts --seed 42 --ticks 2400 --players 2
-  --size small --quiet` → `2400 3017be87` twice in a row (hash = `World.hashState()`).
-  Same seed + same command list must continue to produce the same digest as systems are
-  added; any change to the hash for an unchanged input is a regression.
-- **2026-10-08** — Data provenance: every implemented number traces to `docs/research/*.md`,
-  which cite the aoe4world/data game-file extraction (patch 16.1.9737) and the Age of Empires
-  Wiki. Values that could not be corroborated are tagged in `docs/SPEC.md` §3 as UNVERIFIED
-  or MODELLED.
+- **2026-10-08** — Model: `deepseek-v4.1-flash` (provider `opencode-go`). Claude Haiku 5.5 does
+  not exist in this harness's catalogue; the user explicitly authorised keeping the session
+  default instead, and forbade swapping models without new authorisation.
+- **2026-10-08** — Project name **Aegis of Ages**; repository `guhcostan/aegis-of-ages`. All
+  art, audio and text are original and generated in code.
+- **2026-10-08** — Tick rate 20 Hz; all gameplay state is integer fixed point so that the same
+  seed and command stream reproduce bit-identical results in Node and in the browser.
+- **2026-10-08** — CI build approval uses `allowBuilds` (pnpm 11), **not**
+  `onlyBuiltDependencies` (pnpm 10). Verified empirically: with the pnpm 10 spelling,
+  `pnpm install --frozen-lockfile` still exits 1 with `ERR_PNPM_IGNORED_BUILDS`.
+- **2026-10-08** — Acceptance tests pause the session (`startPaused`) and advance it with
+  explicit `step()` calls, so tick-accurate assertions are not raced by the render loop.
 
 ## Open bugs
 
-Found while reading the code at this revision. `docs/SPEC.md` §4 explains which of these are
-deliberate modelling choices; the entries below are defects, not decisions.
+None known at this revision that affect the acceptance criteria. Suspected, not yet confirmed:
 
-1. **Typecheck fails in `src/render/minimap.ts`** (two `noUnusedLocals` errors):
-   `src/render/minimap.ts(67,11): error TS6133: 'cssWidth' is declared but its value is never
-   read.` and `(68,11): error TS6133: 'cssHeight' is declared but its value is never read.`
-   `npx tsc -p tsconfig.json --noEmit` therefore exits 2. Not my file — reported rather than
-   edited. (An earlier error in `src/ui/hud.ts` — `EntitySnapshot` imported from `./types`
-   instead of `../sim/game` — was fixed by its owner while this document was being written.)
-2. **Population cap is not enforced.** `queueUnit` refuses only at `player.pop >=
-   POP_CAP_MAX` (200) and `productionSystem` stalls only at the 200 ceiling, so the
-   house-derived `popCap` never gates training. Probe: pop 7/10 accepted a 10-villager queue
-   and ended at pop 17/10.
-3. **Farms are unusable.** `spawnBuilding` creates a farm with `amount = 0`, and `runGather`
-   destroys a node whose amount is exhausted, so the first villager to work a farm deletes it.
-   `rebuildFarm()` (which would set `amount = 350`) is never called. `FARM_INFINITE = true`
-   is declared but nothing reads it.
-4. **`World.statMod()` is a stub returning 0.** Every HP modifier (unit tier HP deltas,
-   `court_architects`) is therefore ignored by `spawnUnit`, `spawnBuilding` and
-   `onBuildingComplete`; a spearman spawned after researching `veteran_spearman` still has
-   `maxHp = 80`. `effectiveUnit().hp`, `.speed`, `.range` and `.attackSpeed` are computed but
-   never read by the systems that need them: `movementSystem` uses `def.speed`,
-   `combatSystem` uses `def.range` and `def.attackSpeed` for reach and cooldown. Consequently
-   Wheelbarrow/Lightweight Beams/Greased Axles/Piety are inert, the English Longbowman's +2
-   range and Network of Castles are inert, and Silk Bowstrings would slow units down if it
-   were ever read (higher `attackSpeed` ticks is a longer cooldown while the tech means
-   "fires 15 % faster").
-5. **Monks cannot heal.** `religionSystem` restores `Math.trunc(HEAL_PER_SECOND / TICK_RATE)`
-   = `trunc(7 / 20)` = **0** HP per tick. `REPAIR_HP_PER_SECOND` survives the same division
-   only because 25 / 20 truncates to 1.
-6. **Tech HP deltas leak across units.** The tier HP effects use `appliesTo: 'all'`
-   (`hardened_spearman`, `veteran_spearman`, `elite_spearman`, `veteran_archer`,
-   `elite_archer`, `elite_crossbowman`, `veteran_horseman`, `elite_horseman`,
-   `veteran_knight`, `elite_knight`, `veteran_manatarms`, `elite_manatarms`), and
-   `appliesToUnit` returns true for `'all'`, so each of them nominally grants its HP delta to
-   every unit of the player. The bug is masked today by bug 4.
-7. **Dead configuration that contradicts live values.** `economy.NODE_AMOUNTS` (research
-   values) is unused while `world.RESOURCE_SPECS` (scaled-down values) is live;
-   `economy.BUILD_RATE_PER_VILLAGER` and `buildSpeedFactor` are unused while `build.ts`
-   defines its own rate; `economy.BASE_CARRY`, `FARM_INFINITE`, `START_SHEEP`,
-   `SACRED_SITE_CAPTURE_SECONDS`, `SACRED_SITE_GOLD_PER_MIN` and
-   `constants.RELIC_GOLD_PER_MINUTE` (60, contradicting the live 80) are unused;
-   `techs.ts` re-exports `FP_ONE` for no consumer; `production.ts` re-exports `Age` and
-   `TICK_RATE`; `applyImmediateTechEffects` branches on tech ids (`architecture`,
-   `masonry`) that do not exist in `TECHS`.
-8. **`spawnBuilding` centres buildings half a tile off.** The centre is
-   `(tileX << 10) + ((def.width << 10) >> 1)`, i.e. the footprint's right edge rather than
-   `tileX + (width - 1) / 2`; for a 4×4 building the entity centre sits on the third tile of
-   the footprint. Cosmetic for combat reach and gather distance, but it shifts every
-   building's effective position.
-9. **Command queue is not sorted despite the comment.** `Game.step()` says "Commands first"
-   and applies the pending list in insertion order; a `sort` by `issued`/sequence was
-   intended. It is currently deterministic because insertion order is the caller's, but two
-   callers enqueueing in different orders diverge.
-10. **`Game.snapshot().objectives` is always empty.** `objectives()` in `victory.ts` computes
-    landmark/sacred/wonder progress for the HUD but is never called, so the objectives panel
-    has no data source.
-11. **Stealth and wall flags are inert.** `fog.isVisibleTo` is exported and never called, so
-    forest stealth has no effect; `walkableTop` and `isGate` on wall definitions are never
-    read, so gates do not pass friendly units differently and stone-wall tops are not
-    walkable; `stunUntil` is never written or read.
-12. **`mapType` is ignored.** `generateMap` accepts `opts.mapType` and never uses it, so every
-    map on every size is the same grassland continent; the lobby's map-type choice would
-    therefore be cosmetic.
-13. **Missing browser entry points.** There is no `index.html`, no `src/main.ts`, no
-    `src/game/` content and no `public/` asset, so `pnpm dev` / `pnpm build` cannot yet
-    produce a playable page even though `vite.config.ts` is configured for one.
+- Prolonged bot games under Standard resources can leave a bot with a very small workforce
+  (observed 4–10 villagers after 60 simulated minutes), which looks like a villager-replacement
+  problem rather than a gathering-rate problem. Needs a dedicated measurement.
+- Trade gold is a linear approximation of the original's quadratic distance curve, so long
+  routes pay less than they should.

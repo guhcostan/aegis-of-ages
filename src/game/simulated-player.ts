@@ -35,17 +35,20 @@ export async function runSimulatedPlayer(
   const difficulty = config.difficulty ?? 1;
   const chunk = config.chunkTicks ?? TICK_RATE * 5;
 
-  // The simulated player is another bot controller, but its commands go through
-  // session.issue() so they exercise exactly the same path as a human's.
-  const controller = new BotController(session.game, 0, difficulty, (command) =>
-    session.issue(command),
-  );
+  // If the session already drives the local player (a fully automated bot-vs-bot
+  // match), reuse that controller: two controllers issuing orders for the same
+  // player fight each other and the match never settles.
+  const existing = session.bots.find((bot) => bot.playerId === 0);
+  const controller =
+    existing ??
+    new BotController(session.game, 0, difficulty, (command) => session.issue(command));
 
   // Run the match.
   let tick = session.snapshot().tick;
   while (!session.isOver && tick < maxTicks) {
     for (let i = 0; i < chunk && !session.isOver; i++) {
-      controller.update();
+      // The session steps its own bots; only drive player 0 when it has none.
+      if (!existing) controller.update();
       session.stepOnce();
       tick++;
     }
