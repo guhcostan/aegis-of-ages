@@ -1,0 +1,216 @@
+/**
+ * Movement system: follows paths, resolves collisions, handles arrival.
+ *
+ * Units move in integer fixed point. Collision resolution is a symmetric push
+ * applied in ascending entity-id order, so the outcome never depends on hash
+ * iteration order.
+ */
+import { ARRIVE_EPSILON, FP_ONE } from '../constants';
+import { fpDist, fpDist2, isqrt } from '../fixed';
+import { EntityKind, UnitRole, type Entity } from '../types';
+import { UNITS } from '../data/units';
+import { effectiveUnit } from '../stats';
+import type { World } from '../world';
+
+/** Collision radius of a unit in fixed point. */
+const UNIT_RADIUS = Math.trunc(FP_ONE / 3);
+/** Separation strength: how much of the overlap is resolved per tick (percent). */
+const SEPARATION_PERCENT = 60;
+
+export function movementSystem(world: World): void {
+  const scratch: Entity[] = [];
+  const map = world.map;
+
+  for (let i = 0; i < world.entities.length; i++) {
+    const e = world.entities[i];
+    if (!e || !e.alive || e.kind !== EntityKind.Unit) continue;
+    if (e.inside !== 0) continue;
+    if (!e.hasGoal) continue;
+
+    const def = UNITS[e.def];
+    if (!def) continue;
+    // Movement speed comes from the effective stats so that Wheelbarrow and
+    // Husbandry actually change behaviour.
+    const speed = effectiveUnit(world, e.owner, def).speed;
+    if (speed <= 0) continue;
+
+    // Once the unit is on the final stretch, walk straight at the goal so that
+    // the last few pixels do not zig-zag along the grid.
+    const goalDist = fpDist(e.x, e.y, e.goalX, e.goalY);
+    if (goalDist <= ARRIVE_EPSILON) {
+      arrive(e);
+      continue;
+    }
+
+    let moved = false;
+    if (e.path.length > e.pathIndex * 2) {
+      const wx = e.path[e.pathIndex * 2] as number;
+      const wy = e.path[e.pathIndex * 2 + 1] as number;
+      const d = fpDist(e.x, e.y, wx, wy);
+      if (d <= speed) {
+        // Reached this waypoint; snap and continue toward the next one.
+        e.x = wx;
+        e.y = wy;
+        e.pathIndex++;
+        moved = true;
+      } else if (d > 0) {
+        const nx = e.x + Math.trunc(((wx - e.x) * speed) / d);
+        const ny = e.y + Math.trunc(((wy - e.y) * speed) / d);
+        e.x = nx;
+        e.y = ny;
+        moved = true;
+      }
+    }
+
+    if (!moved) {
+      // No usable path: try a straight line, otherwise give up and repath later.
+      const straight = world.pathfinder.straightWalkable(e.x, e.y, e.goalX, e.goalY, sizeOf(e));
+      if (straight) {
+        const d = goalDist;
+        const step = Math.min(speed, d);
+        e.x += Math.trunc(((e.goalX - e.x) * step) / d);
+        e.y += Math.trunc(((e.goalY - e.y) * step) / d);
+      } else if (world.tick >= e.repathAt) {
+        const path = world.pathfinder.findPath(
+          e.x >> 10,
+          e.y >> 10,
+          e.goalX >> 10,
+          e.goalY >> 10,
+          sizeOf(e),
+          6000,
+          e.owner,
+        );
+        if (path && path.length >= 2) {
+          e.path = path;
+          e.pathIndex = 0;
+        } else {
+          e.hasGoal = false;
+          e.path = [];
+          e.pathIndex = 0;
+        }
+        e.repathAt = world.tick + 12;
+      }
+    }
+
+    // Update facing from actual displacement.
+    updateFacing(e);
+
+    if (fpDist(e.x, e.y, e.goalX, e.goalY) <= ARRIVE_EPSILON) arrive(e);
+  }
+
+  // --- Collision resolution ---
+  for (let i = 0; i < world.entities.length; i++) {
+    const a = world.entities[i];
+    if (!a || !a.alive || a.kind !== EntityKind.Unit || a.inside !== 0) continue;
+    const neighbours = world.queryRadius(a.x, a.y, UNIT_RADIUS * 2, scratch);
+    for (const b of neighbours) {
+      if (b.id <= a.id) continue; // handle each pair once, in id order
+      if (b.kind !== EntityKind.Unit || b.inside !== 0) continue;
+      const d2 = fpDist2(a.x, a.y, b.x, b.y);
+      const minD = UNIT_RADIUS * 2;
+      if (d2 >= minD * minD || d2 === 0) continue;
+      const d = isqrt(d2);
+      if (d === 0) continue;
+      const overlap = minD - d;
+      let push = Math.trunc((overlap * SEPARATION_PERCENT) / 100);
+      if (push < 1) push = 1;
+      const dx = Math.trunc(((b.x - a.x) * push) / d / 2);
+      const dy = Math.trunc(((b.y - a.y) * push) / d / 2);
+      // Only move onto passable ground.
+      if (isFree(world, a.x - dx, a.y - dy)) {
+        a.x -= dx;
+        a.y -= dy;
+      }
+      if (isFree(world, b.x + dx, b.y + dy)) {
+        b.x += dx;
+        b.y += dy;
+      }
+    }
+  }
+
+  // Keep every unit inside the map.
+  const maxX = (map.width << 10) - 1;
+  const maxY = (map.height << 10) - 1;
+  for (let i = 0; i < world.entities.length; i++) {
+    const e = world.entities[i];
+    if (!e || !e.alive || e.kind !== EntityKind.Unit) continue;
+    if (e.x < 0) e.x = 0;
+    if (e.y < 0) e.y = 0;
+    if (e.x > maxX) e.x = maxX;
+    if (e.y > maxY) e.y = maxY;
+  }
+}
+
+function isFree(world: World, x: number, y: number): boolean {
+  if (x < 0 || y < 0) return false;
+  if (x >= world.map.width << 10 || y >= world.map.height << 10) return false;
+  return world.map.passable[(y >> 10) * world.map.width + (x >> 10)] === 1;
+}
+
+/** Collision size class: siege engines need wider clearance. */
+export function sizeOf(e: Entity): number {
+  const def = UNITS[e.def];
+  if (!def) return 1;
+  return def.role === UnitRole.Siege ? 2 : 1;
+}
+
+function updateFacing(e: Entity): void {
+  const dx = e.goalX - e.x;
+  const dy = e.goalY - e.y;
+  if (dx === 0 && dy === 0) return;
+  // Angle in 1/256 turns, computed with integer atan2 over the 8 octants.
+  let angle = 0;
+  const ax = Math.abs(dx);
+  const ay = Math.abs(dy);
+  const ratio = ay === 0 ? 0 : Math.trunc((ax * 64) / (ax + ay));
+  if (dx >= 0 && dy >= 0) angle = ratio;
+  else if (dx < 0 && dy >= 0) angle = 128 - ratio;
+  else if (dx < 0 && dy < 0) angle = 128 + ratio;
+  else angle = 256 - ratio;
+  e.facing = angle & 255;
+}
+
+/** Clear the movement goal when the unit has arrived. */
+function arrive(e: Entity): void {
+  e.x = e.goalX;
+  e.y = e.goalY;
+  e.hasGoal = false;
+  e.path = [];
+  e.pathIndex = 0;
+}
+
+/** Give a unit a new destination, computing a path lazily. */
+export function setDestination(world: World, e: Entity, x: number, y: number, queueOrder = false): void {
+  if (!queueOrder) {
+    e.orders.length = 0;
+  }
+  const path = world.pathfinder.findPath(
+    e.x >> 10,
+    e.y >> 10,
+    x >> 10,
+    y >> 10,
+    sizeOf(e),
+    6000,
+    e.owner,
+  );
+  e.path = path ?? [];
+  e.pathIndex = 0;
+  e.goalX = x;
+  e.goalY = y;
+  e.hasGoal = true;
+  e.repathAt = world.tick + 15;
+}
+
+/** Teleport-free helper for tests and spawn logic. */
+export function faceToward(e: Entity, x: number, y: number): void {
+  const dx = x - e.x;
+  const dy = y - e.y;
+  if (dx === 0 && dy === 0) return;
+  const ax = Math.abs(dx);
+  const ay = Math.abs(dy);
+  const ratio = ay === 0 ? 0 : Math.trunc((ax * 64) / (ax + ay));
+  if (dx >= 0 && dy >= 0) e.facing = ratio & 255;
+  else if (dx < 0 && dy >= 0) e.facing = (128 - ratio) & 255;
+  else if (dx < 0 && dy < 0) e.facing = (128 + ratio) & 255;
+  else e.facing = (256 - ratio) & 255;
+}
