@@ -32,6 +32,8 @@ export interface GameApi {
   speed(multiplier: number): void;
   /** Smoothed frames per second as measured by the render loop. */
   fps(): number;
+  /** Renderer counters: draw calls, live instances and the renderer's own fps. */
+  renderStats(): { drawCalls: number; instances: number; fps: number };
   /** Current selection. */
   selection(): number[];
   /** Replace the selection. */
@@ -108,6 +110,9 @@ export function installGameApi(hooks: ApiHooks): GameApi {
     speed: (multiplier) => requireSession()?.setSpeed(multiplier),
 
     fps: () => requireSession()?.currentFps() ?? 0,
+
+    renderStats: () =>
+      requireSession()?.renderer.stats() ?? { drawCalls: 0, instances: 0, fps: 0 },
 
     selection: () => requireSession()?.selection ?? [],
 

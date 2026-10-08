@@ -1,3 +1,23 @@
+# pnpm workspace configuration.
+#
+# This repository is a single package, but pnpm 10+ reads its settings from this
+# file rather than from the `pnpm` key in package.json.
+#
+# IMPORTANT: on pnpm 11 the build-approval setting is `allowBuilds`, a map of
+# package name to boolean. The older pnpm 10 spelling `onlyBuiltDependencies`
+# (a list) is NOT honoured by pnpm 11.9.0: with it, installs still exit 1 with
+# ERR_PNPM_IGNORED_BUILDS, which is what made CI red. Verified empirically with a
+# clean `pnpm install` of a single esbuild dependency:
+#   onlyBuiltDependencies -> exit 1
+#   allowBuilds: { esbuild: true } -> exit 0
+# pnpm 11 also rewrites this file itself and inserts an `allowBuilds` stub with
+# the placeholder text "set this to true or false", which is what the previous
+# broken version of this file contained.
+packages:
+  - '.'
+
+# esbuild downloads its platform binary; workerd (used by wrangler) prepares its
+# runtime. Without these the Vite build and `wrangler deploy` cannot run.
 allowBuilds:
-  esbuild: set this to true or false
-  workerd: set this to true or false
+  esbuild: true
+  workerd: true

@@ -96,9 +96,11 @@ jobs:
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
   e2e:
-    name: e2e against production
-    needs: deploy
-    if: needs.deploy.outputs.url != ''
+    name: e2e
+    needs: [build, deploy]
+    # `always()` keeps this job alive on pull requests, where the deploy job is
+    # skipped; it still requires a successful build.
+    if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -118,10 +120,29 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: e2e against the production URL
+      - name: Build
+        run: pnpm build
+
+      # Prefer the deployed production URL. When the Cloudflare secret is not
+      # configured (forks, first-time setup) fall back to the production build
+      # served locally, so the suite still runs instead of being skipped.
+      - name: Serve the build
+        if: needs.deploy.outputs.url == ''
+        run: |
+          npx vite preview --port 4173 --strictPort &
+          for i in $(seq 1 40); do
+            if curl -sf http://localhost:4173/ > /dev/null; then break; fi
+            sleep 1
+          done
+          curl -sf http://localhost:4173/ > /dev/null || { echo "preview server did not start"; exit 1; }
+
+      - name: e2e
         env:
-          BASE_URL: ${{ needs.deploy.outputs.url }}
-        run: pnpm test:e2e
+          BASE_URL: ${{ needs.deploy.outputs.url != '' && needs.deploy.outputs.url || 'http://localhost:4173' }}
+          E2E_TARGET: ${{ needs.deploy.outputs.url != '' && 'production' || 'local-preview' }}
+        run: |
+          echo "Running e2e against $BASE_URL ($E2E_TARGET)"
+          pnpm test:e2e
 
       - name: Upload Playwright report
         if: always()
