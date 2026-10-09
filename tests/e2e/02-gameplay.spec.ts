@@ -6,6 +6,7 @@
  */
 import { expect, test } from '@playwright/test';
 import { expectNoErrors, loadShell, startMatch, state, step, watchConsole } from './helpers';
+import { measureBrightness, sceneClip } from './pixels';
 
 /** Simulation constants mirrored from src/sim/constants.ts for readability. */
 const TICK_RATE = 20;
@@ -84,6 +85,33 @@ test.describe('world and camera', () => {
         `${size}: only ${Math.round((framing?.coverage ?? 0) * 100)}% of the view is over the map`,
       ).toBeGreaterThan(0.85);
     }
+    expectNoErrors(watch);
+  });
+
+  test('the rendered viewport is actually drawn, not a black screen', async ({ page }) => {
+    const watch = watchConsole(page);
+    await loadShell(page);
+    // Default lobby settings: fog of war on, which is the state a player starts in.
+    await startMatch(page, { seed: 1234, mapSize: 'medium' });
+
+    const viewport = page.viewportSize() ?? { width: 1280, height: 720 };
+    const clip = sceneClip(viewport);
+    const report = await measureBrightness(page, clip);
+
+    // A working viewport shows grass, buildings and units; a broken one is black
+    // with a single strip of water. These thresholds separate the two by a wide
+    // margin rather than by a hair.
+    expect(report.mean, `viewport is nearly black (mean luma ${report.mean.toFixed(1)})`).toBeGreaterThan(30);
+    expect(
+      report.darkFraction,
+      `${Math.round(report.darkFraction * 100)}% of the viewport is near black`,
+    ).toBeLessThan(0.35);
+    expect(report.colourSpread, 'the viewport has almost no colour variety').toBeGreaterThan(12);
+
+    // And the build stamp is available for support.
+    const build = await page.evaluate(() => window.__game?.buildId() ?? '');
+    expect(build.length, 'the bundle carries no build stamp').toBeGreaterThan(0);
+
     expectNoErrors(watch);
   });
 

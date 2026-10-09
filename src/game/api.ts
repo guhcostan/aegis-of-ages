@@ -10,10 +10,13 @@ import type { Command } from '../sim/commands';
 import type { StateSnapshot } from '../sim/game';
 import type { GameSession } from './session';
 import { runSimulatedPlayer, type SimulatedPlayerConfig } from './simulated-player';
+import { buildId } from './build';
 
 export interface GameApi {
   /** Version stamp so tests can assert they are talking to the right build. */
   readonly version: string;
+  /** Git SHA and build time of the running bundle. */
+  buildId(): string;
   /** True once a match is running. */
   ready(): boolean;
   /** Current simulation tick. */
@@ -45,6 +48,11 @@ export interface GameApi {
   renderStats(): { drawCalls: number; instances: number; fps: number };
   /** Fraction (0..1) of the visible ground that is inside the map. */
   viewCoverage(): number;
+  /**
+   * One-shot support dump: build stamp, canvas sizes, camera, terrain bounds,
+   * fog coverage, renderer counters and frame diagnostics.
+   */
+  diagnose(): Record<string, unknown>;
   /** Frame diagnostics: commands handed to the HUD, selection size, draw error. */
   debugFrame(): {
     commands: number;
@@ -101,13 +109,15 @@ export interface ApiHooks {
   showMenu: () => void;
 }
 
-export const API_VERSION = '1.0.0';
+export const API_VERSION = '1.1.0';
 
 export function installGameApi(hooks: ApiHooks): GameApi {
   const requireSession = (): GameSession | null => hooks.session();
 
   const api: GameApi = {
     version: API_VERSION,
+
+    buildId,
 
     ready: () => requireSession() !== null,
 
@@ -146,6 +156,8 @@ export function installGameApi(hooks: ApiHooks): GameApi {
       requireSession()?.renderer.stats() ?? { drawCalls: 0, instances: 0, fps: 0 },
 
     viewCoverage: () => requireSession()?.renderer.groundCoverage() ?? 0,
+
+    diagnose: () => requireSession()?.diagnose() ?? { build: buildId(), error: 'no match running' },
 
     debugFrame: () =>
       requireSession()?.debugFrame() ??

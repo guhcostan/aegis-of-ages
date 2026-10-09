@@ -23,6 +23,7 @@ import { createRenderer } from '../render/renderer';
 import { createHud } from '../ui/hud';
 import type { CommandButton, Hud, HudModel, HudCallbacks, LobbySettings, ObjectiveRow, ScoreRow } from '../ui/types';
 import { InputController } from './input';
+import { buildId } from './build';
 import { AudioEngine } from '../audio/audio';
 
 /** Starting resource presets offered in the lobby. */
@@ -947,6 +948,52 @@ export class GameSession {
 
   toast(message: string): void {
     this.hud.toast(message);
+  }
+
+  /**
+   * One-shot diagnostic blob for support: everything needed to tell a broken
+   * viewport apart from a working one without a back-and-forth.
+   */
+  diagnose(): Record<string, unknown> {
+    const canvas = this.renderer.canvasInfo();
+    const fog = this.game.fogs[0];
+    let visibleTiles = 0;
+    let exploredTiles = 0;
+    if (fog) {
+      for (let i = 0; i < fog.visible.length; i++) {
+        if (fog.visible[i]) visibleTiles++;
+        if (fog.explored[i]) exploredTiles++;
+      }
+    }
+    const camera = this.renderer.camera;
+    const focus = camera.focus();
+    let units = 0;
+    let buildings = 0;
+    let resources = 0;
+    for (const e of this.game.world.all()) {
+      if (e.kind === EntityKind.Unit) units++;
+      else if (e.kind === EntityKind.Building) buildings++;
+      else if (e.kind === EntityKind.ResourceNode) resources++;
+    }
+    return {
+      build: buildId(),
+      canvas,
+      webgl: this.renderer.contextKind(),
+      dpr: typeof window === 'undefined' ? 1 : window.devicePixelRatio,
+      camera: {
+        focusTiles: [Math.round(focus.x / 1024), Math.round(focus.y / 1024)],
+        distance: Math.round(camera.distance() * 10) / 10,
+        rotation: camera.rotation(),
+        coverage: Math.round(this.renderer.groundCoverage() * 100) / 100,
+      },
+      mapTiles: [this.game.world.map.width, this.game.world.map.height],
+      terrainBounds: this.renderer.terrainBounds(),
+      fog: { visibleTiles, exploredTiles, totalTiles: fog ? fog.visible.length : 0 },
+      renderer: this.renderer.stats(),
+      counts: { units, buildings, resources },
+      frame: this.debugFrame(),
+      match: { tick: this.game.world.tick, over: this.game.isOver },
+    };
   }
 
   /** Frame diagnostics: how many commands the HUD was given, and any error. */

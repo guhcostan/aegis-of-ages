@@ -84,6 +84,45 @@ Delivery:
       deploy, e2e) on every push to main.
 - [x] Deployed with wrangler to https://aegis-of-ages.guhcostan.workers.dev.
 
+## Reported bug, third round: black viewport (pixel-level verification added)
+
+The report came back with sharper evidence: the renderer draws (16 draw calls,
+416 instances, 120 fps), there are no console errors, and the viewport is still
+black. The suspected cause was a scale mismatch between the terrain mesh and the
+instances/camera.
+
+Measured against production:
+
+- **Terrain mesh bounding box: `min [0, -0.2, 0]`, `max [144, 0.4, 144]`** — in
+  TILES, not fixed point. The mesh is named `aegis-terrain`, it is in the scene,
+  and the instances/camera are in the same units. The scale hypothesis is
+  disproved.
+- Rendered in **Chromium, WebKit and Firefox**: all three draw the scene with no
+  errors (Firefox reports ~118 fps, matching the reported 120).
+- **devicePixelRatio 1, 2 and 3**: identical, correct output.
+- Full diagnostic dump in Chromium and Firefox: camera on the Town Center,
+  coverage 1.0, 644-733 fog tiles visible of 20736, terrain bounds in tiles,
+  16 draw calls.
+
+A real gap in the test suite was found and closed: every previous assertion
+checked **camera maths** (`viewCoverage`), not **pixels**. A black viewport with a
+perfectly aimed camera passed all of them — which is exactly the reported bug.
+The suite now measures the rendered frame:
+
+- `tests/e2e/pixels.ts` screenshots a clip of the scene (clear of the HUD) and
+  decodes it, reporting mean luminance, the fraction of near-black pixels and
+  colour spread.
+- Two tests assert the opening viewport is not black: mean luma > 30, near-black
+  fraction < 0.35, colour spread > 12.
+
+Support tooling added so the next report can name its own bundle:
+
+- `window.__game.buildId()` — git SHA plus build time, injected by Vite.
+- `window.__game.diagnose()` — one JSON blob with the build stamp, canvas backing
+  and CSS sizes, WebGL version, dpr, camera focus/distance/rotation/coverage, map
+  size, terrain bounds, fog tile counts, renderer counters, entity counts, frame
+  diagnostics and match state.
+
 ## Reported bug, second round: black viewport (hardened)
 
 The report was repeated after the first fix. Measured against the deployed bundle

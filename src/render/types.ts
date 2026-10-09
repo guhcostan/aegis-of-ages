@@ -106,6 +106,15 @@ export interface Renderer {
    */
   groundCoverage(): number;
 
+  /** Canvas backing-store and CSS sizes, for diagnostics. */
+  canvasInfo(): { backing: [number, number]; css: [number, number] };
+
+  /** WebGL version reported by the live context. */
+  contextKind(): string;
+
+  /** Terrain mesh bounding box in world units (tiles), or null. */
+  terrainBounds(): { min: [number, number, number]; max: [number, number, number] } | null;
+
   dispose(): void;
 }
 

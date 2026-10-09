@@ -1331,6 +1331,42 @@ class AegisRenderer implements Renderer {
     return this.camera.groundCoverage();
   }
 
+  /** Canvas backing-store and CSS sizes, for diagnostics. */
+  canvasInfo(): { backing: [number, number]; css: [number, number] } {
+    const canvas = this.renderer.domElement;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      backing: [canvas.width, canvas.height],
+      css: [Math.round(rect.width), Math.round(rect.height)],
+    };
+  }
+
+  /** WebGL version string reported by the live context. */
+  contextKind(): string {
+    const gl = this.renderer.getContext();
+    if (typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext) {
+      return 'webgl2';
+    }
+    return 'webgl1';
+  }
+
+  /**
+   * Bounding box of the terrain mesh, in world units (tiles). A box in the
+   * hundreds of thousands would mean the mesh is in fixed point while the
+   * entities and camera are in tiles.
+   */
+  terrainBounds(): { min: [number, number, number]; max: [number, number, number] } | null {
+    const mesh = this.terrainMesh;
+    if (!mesh) return null;
+    mesh.geometry.computeBoundingBox();
+    const bb = mesh.geometry.boundingBox;
+    if (!bb) return null;
+    return {
+      min: [bb.min.x, bb.min.y, bb.min.z],
+      max: [bb.max.x, bb.max.y, bb.max.z],
+    };
+  }
+
   resize(width: number, height: number): void {
     const w = Math.max(1, Math.floor(width));
     const h = Math.max(1, Math.floor(height));

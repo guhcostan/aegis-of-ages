@@ -9,6 +9,7 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 import { expectNoErrors, loadShell, watchConsole } from './helpers';
+import { measureBrightness, sceneClip } from './pixels';
 
 const TICK_RATE = 20;
 
@@ -208,6 +209,19 @@ test.describe('golden path: a playable match from the menu to victory', () => {
     expect(coverage, `only ${Math.round(coverage * 100)}% of the view is over the map`).toBeGreaterThan(
       0.85,
     );
+
+    // Coverage is camera maths; this is the actual frame. A black viewport with a
+    // correctly aimed camera is exactly the bug that was reported twice.
+    const viewport = page.viewportSize() ?? { width: 1280, height: 720 };
+    const pixels = await measureBrightness(page, sceneClip(viewport));
+    expect(
+      pixels.mean,
+      `the opening viewport is nearly black (mean luma ${pixels.mean.toFixed(1)})`,
+    ).toBeGreaterThan(30);
+    expect(
+      pixels.darkFraction,
+      `${Math.round(pixels.darkFraction * 100)}% of the opening viewport is near black`,
+    ).toBeLessThan(0.35);
 
     /* ---------------------------------------------------------------- *
      * 3. Villagers gather all four resources

@@ -1,7 +1,22 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'node:path';
+import { execSync } from 'node:child_process';
+
+/** Short git SHA, or 'nogit', used to stamp the bundle for support/debugging. */
+function buildStamp(): string {
+  try {
+    const sha = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
+    const when = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    return `${sha} ${when}`;
+  } catch {
+    return 'unknown';
+  }
+}
 
 export default defineConfig({
+  define: {
+    __AEGIS_BUILD__: JSON.stringify(buildStamp()),
+  },
   resolve: {
     alias: {
       '@sim': resolve(__dirname, 'src/sim'),
