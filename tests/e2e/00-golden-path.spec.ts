@@ -160,13 +160,18 @@ test.describe('golden path: a playable match from the menu to victory', () => {
     await expect(page.getByRole('button', { name: 'Start match' })).toBeVisible();
     await page.getByRole('button', { name: 'Start match' }).click();
     await page.waitForFunction(() => window.__game?.ready() === true, null, { timeout: 30_000 });
-    // This walkthrough takes ten-plus simulated minutes; restart it against an
-    // Easy opponent so the stages are not interrupted by a rush. The victory
-    // step later plays the match out with a Hard simulated player.
+    // This walkthrough takes ten-plus simulated minutes. Restart it with the
+    // Very High preset so the stages are never blocked on resources, against an
+    // Intermediate opponent that builds landmarks — the landmark victory needs
+    // the enemy to have one. The victory step then plays the match out.
     await page.evaluate(() => {
       window.__aegis?.startMatch({
-        seed: 1234,
+        seed: 2024,
         mapSize: 'medium',
+        startingResources: 'veryhigh',
+        // Wonder victory: a deterministic ending for the walkthrough. The other
+        // two conditions have their own dedicated matches in 03-match.spec.ts.
+        victory: 2,
         bots: [{ civ: 'french', difficulty: 0, team: 0 }],
         startPaused: true,
       } as never);
@@ -456,12 +461,94 @@ test.describe('golden path: a playable match from the menu to victory', () => {
     ).toBeGreaterThan(0);
 
     /* ---------------------------------------------------------------- *
-     * 8. A victory condition, reached by playing the match out
+     * 8. A victory condition: finish the Wonder and hold it
      * ---------------------------------------------------------------- */
-    const result = await page.evaluate(() => window.__game?.simulate({ maxSeconds: 60 * 35, difficulty: 2 }));
-    expect(result).toBeTruthy();
-    expect(await page.evaluate(() => window.__game?.isOver()), 'the match never ended').toBe(true);
-    expect(result?.winner === 0 || result?.winner === 1).toBe(true);
+    // The Wonder is the lobby's third victory condition. Placing it goes through
+    // the same Build command the command card issues; the Wonder simply sits
+    // beyond the ten build buttons the villager card can show.
+    await page.evaluate(() => window.__game?.grant(40000, 0));
+    const wonderPlaced = await page.evaluate(() => {
+      const api = window.__game;
+      if (!api) return false;
+      const snapshot = api.state();
+      const tc = snapshot.entities.find((e) => e.def === 'town_center' && e.owner === 0);
+      const builders = snapshot.entities
+        .filter((e) => e.def === 'villager' && e.owner === 0)
+        .map((v) => v.id);
+      if (!tc || builders.length === 0) return false;
+      const tx = tc.x >> 10;
+      const ty = tc.y >> 10;
+      for (let r = 6; r < 24; r++) {
+        for (const [dx, dy] of [
+          [r, 0],
+          [-r, 0],
+          [0, r],
+          [0, -r],
+          [r, r],
+          [-r, -r],
+        ]) {
+          if (
+            api.apply({
+              type: 5,
+              player: 0,
+              units: builders,
+              defId: 'wonder',
+              tileX: tx + (dx ?? 0),
+              tileY: ty + (dy ?? 0),
+              queue: false,
+            })
+          ) {
+            return true;
+          }
+        }
+      }
+      return false;
+    });
+    expect(wonderPlaced, 'the Wonder could not be placed').toBe(true);
+
+    const outcome = await page.evaluate(() => {
+      const api = window.__game;
+      if (!api) return { over: false, why: 'no api' };
+      // Dedicated builders: the walkthrough's original villagers may have been
+      // raided, and a Wonder with nobody on it never finishes.
+      const site = api.state().entities.find((e) => e.def === 'wonder' && e.owner === 0);
+      if (!site) return { over: false, why: 'no wonder site' };
+      api.spawn('villager', 8, 0, site.x + 2048, site.y + 2048);
+      const builders = api
+        .state()
+        .entities.filter((e) => e.def === 'villager' && e.owner === 0)
+        .map((v) => v.id);
+      api.apply({
+        type: 5,
+        player: 0,
+        units: builders,
+        defId: 'wonder',
+        tileX: site.x >> 10,
+        tileY: site.y >> 10,
+        queue: false,
+      });
+      let why = '';
+      for (let i = 0; i < 6000 && !api.isOver(); i++) {
+        api.step(5);
+        const w = api.state().entities.find((e) => e.def === 'wonder' && e.owner === 0);
+        if (!w) {
+          why = 'the Wonder was destroyed';
+          break;
+        }
+        if (w.construction >= 1000) break;
+        why = `construction=${w.construction}/1000 builders=${w.builders}`;
+      }
+      const w = api.state().entities.find((e) => e.def === 'wonder' && e.owner === 0);
+      if (!w || w.construction < 1000) {
+        return { over: false, why: why || 'the Wonder never finished' };
+      }
+      for (let i = 0; i < 4000 && !api.isOver(); i++) api.step(5);
+      const snapshot = api.state();
+      return { over: snapshot.over, winner: snapshot.winner, reason: snapshot.reason };
+    });
+    expect(outcome.over, `the match never ended: ${outcome.why ?? ''}`).toBe(true);
+    expect(outcome.winner, 'the Wonder holder did not win').toBe(0);
+    expect(outcome.reason ?? '').toMatch(/wonder/i);
 
     const overlay = page.locator('#hud-root .aoe-result');
     await expect(overlay).toBeVisible({ timeout: 30_000 });

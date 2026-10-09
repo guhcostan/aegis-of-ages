@@ -160,6 +160,7 @@ export class InputController {
       this.lastMiddleX = ev.clientX;
       this.lastMiddleY = ev.clientY;
       this.session.renderer.camera.panByScreen(-dx, -dy);
+      this.session.notifyCameraInput();
       return;
     }
 
@@ -232,6 +233,7 @@ export class InputController {
     // camera closer. Scrolling down must therefore zoom OUT.
     const factor = ev.deltaY > 0 ? 1 / 1.12 : 1.12;
     this.session.renderer.camera.zoomBy(factor);
+    this.session.notifyCameraInput();
   }
 
   /* ---------------------------------------------------------------- *
@@ -249,11 +251,13 @@ export class InputController {
     // Camera rotation: Q and E step 45 degrees, matching the AoE IV feel.
     if (!ctrl && (key === 'q' || key === 'Q')) {
       this.session.renderer.camera.rotateBy(-1);
+      this.session.notifyCameraInput();
       ev.preventDefault();
       return;
     }
     if (!ctrl && (key === 'e' || key === 'E')) {
       this.session.renderer.camera.rotateBy(1);
+      this.session.notifyCameraInput();
       ev.preventDefault();
       return;
     }
@@ -266,6 +270,7 @@ export class InputController {
     if (key === 'Home') {
       const home = this.session.homePosition();
       this.session.renderer.camera.centerOn(home.x, home.y);
+      this.session.notifyCameraInput();
       ev.preventDefault();
       return;
     }
@@ -302,7 +307,10 @@ export class InputController {
       if (this.pointerY > rect.height - EDGE_PAN_MARGIN) dy -= step;
     }
 
-    if (dx !== 0 || dy !== 0) camera.panByScreen(dx, dy);
+    if (dx !== 0 || dy !== 0) {
+      camera.panByScreen(dx, dy);
+      this.session.notifyCameraInput();
+    }
   }
 
   /** Screen-space pointer position, exposed for tests and tooltips. */

@@ -166,9 +166,18 @@ export function installGameApi(hooks: ApiHooks): GameApi {
     select: (ids) => requireSession()?.setSelection(ids),
 
     camera: {
-      center: (x, y) => requireSession()?.renderer.camera.centerOn(x, y),
-      zoom: (factor) => requireSession()?.renderer.camera.zoomBy(factor),
-      rotate: (steps) => requireSession()?.renderer.camera.rotateBy(steps),
+      center: (x, y) => {
+        requireSession()?.renderer.camera.centerOn(x, y);
+        requireSession()?.notifyCameraInput();
+      },
+      zoom: (factor) => {
+        requireSession()?.renderer.camera.zoomBy(factor);
+        requireSession()?.notifyCameraInput();
+      },
+      rotate: (steps) => {
+        requireSession()?.renderer.camera.rotateBy(steps);
+        requireSession()?.notifyCameraInput();
+      },
       focus: () => requireSession()?.renderer.camera.focus() ?? { x: 0, y: 0 },
       distance: () => requireSession()?.renderer.camera.distance() ?? 0,
     },

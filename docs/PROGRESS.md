@@ -84,6 +84,37 @@ Delivery:
       deploy, e2e) on every push to main.
 - [x] Deployed with wrangler to https://aegis-of-ages.guhcostan.workers.dev.
 
+## Reported bug, second round: black viewport (hardened)
+
+The report was repeated after the first fix. Measured against the deployed bundle
+(asset `index-CSsiX2hA.js`, which does contain the fix): eight configurations —
+seeds 1234/7/99/2024/55/31/4321/8 across tiny, small, medium, large and huge maps
+and the forest and dry terrain presets — all opened with the camera on the Town
+Center and **100% view coverage**. The exact lobby flow at the reported 1400x900
+resolution measured `tcTile [85,109] focusTile [85,109] distance 28 coverage 100%`.
+
+Two real defects were found while investigating, and both are fixed:
+
+1. **Every seed produced the same start positions.** Measured: seeds 1234, 7, 99
+   and 2024 all spawned at exactly (109,58) and (37,91). The terrain varied by
+   seed but the base layout did not, because the placement always picked the
+   candidate nearest a fixed ring point. The ring angle and radius are now
+   jittered from the match RNG: seed 1234 gives (85,109)/(61,34), seed 7 gives
+   (34,61)/(109,85), seed 2024 gives (49,40)/(97,103). Edge margin stays at
+   34-40 tiles and separation at 79 tiles.
+2. **The camera could be re-framed by anything that touched it during start-up.**
+   The home framing is now held for the first few seconds: while the player has
+   not moved the camera themselves, each frame re-centres it on the home base if
+   the focus has drifted or the view coverage drops below 90%. Any player camera
+   action — pan, wheel, rotate, minimap click, Home key, or the `__game.camera`
+   helpers — hands the camera over permanently. Verified: after a programmatic
+   centre the camera stays where it was put (coverage 95%, not snapped back).
+
+The coordinates in the report, roughly (10.5, 127.5) on a 144-tile map, are
+exactly what the generator produced **before** the edge-margin fix (8-12 tiles
+from the border); the current generator cannot place a base closer than 34 tiles
+to the edge on a medium map, which is asserted by the framing tests.
+
 ## Reported bug: black viewport at match start (fixed)
 
 The user reported that after Start match the 3D viewport was almost entirely

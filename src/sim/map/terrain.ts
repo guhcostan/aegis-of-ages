@@ -262,11 +262,16 @@ export function generateMap(opts: MapGenOptions): GeneratedMap {
     starts.push({ x: cx, y: cy });
   } else {
     // Seed the first base on the ring angle nearest the map edge so bases end
-    // up spread around the landmass rather than all on one side.
+    // up spread around the landmass rather than all on one side. The angle and
+    // radius are jittered from the match RNG: without that, every seed produced
+    // the identical layout (measured: starts at exactly (109,58) and (37,91) for
+    // seeds 1234, 7, 99 and 2024), which made seeded maps feel fake.
+    const angleJitter = rng.nextInt(256);
+    const radiusJitter = rng.range(88, 108);
     for (let p = 0; p < count; p++) {
-      const angleStep = Math.trunc((p * 256) / count);
-      const idealX = cx + Math.trunc((landRadius * 0.55 * cosTable(angleStep)) / 1024);
-      const idealY = cy + Math.trunc((landRadius * 0.55 * sinTable(angleStep)) / 1024);
+      const angleStep = (Math.trunc((p * 256) / count) + angleJitter) & 255;
+      const idealX = cx + Math.trunc((landRadius * 0.55 * radiusJitter * cosTable(angleStep)) / (1024 * 100));
+      const idealY = cy + Math.trunc((landRadius * 0.55 * radiusJitter * sinTable(angleStep)) / (1024 * 100));
       let best = candidates[0] as GridPoint;
       let bestD = Number.MAX_SAFE_INTEGER;
       for (const c of candidates) {

@@ -77,6 +77,12 @@ export class GameSession {
   private commandTrace = '';
   /** Last render error already logged, to avoid flooding the console. */
   private reportedDrawError: string | null = null;
+  /** Home base position, held while the camera is still ours to place. */
+  private homeFocusX: number | null = null;
+  private homeFocusY: number | null = null;
+  private homeZoomApplied = false;
+  /** True once the player has moved the camera themselves. */
+  private cameraTouched = false;
   /** Frames actually executed by the animation loop; frozen means the loop died. */
   private frames = 0;
 
@@ -119,7 +125,10 @@ export class GameSession {
       onSelectEntity: (id, additive) => this.selectEntity(id, additive),
       onIdleVillager: () => this.selectIdleVillager(),
       onSelectAllMilitary: () => this.selectAllMilitary(),
-      onMinimapClick: (x, y) => this.renderer.camera.centerOn(x, y),
+      onMinimapClick: (x, y) => {
+        this.renderer.camera.centerOn(x, y);
+        this.notifyCameraInput();
+      },
       onControlGroup: (index, additive) => this.selectControlGroup(index, additive),
       onAssignControlGroup: (index) => this.assignControlGroup(index),
       onCancelQueue: (building, index) =>
@@ -152,6 +161,11 @@ export class GameSession {
   /**
    * Centre the camera on the player's starting Town Center and pull in to a
    * working zoom, the way a match opens in the original.
+   *
+   * The framing is re-asserted for the first few seconds (see `holdHomeFraming`)
+   * so that nothing which touches the camera during start-up — a late map
+   * rebuild, a resize, a re-init — can leave the player looking at the empty
+   * middle of the map.
    */
   private openOnHomeBase(): void {
     let home: Entity | undefined;
@@ -161,12 +175,52 @@ export class GameSession {
         break;
       }
     }
+    if (!home) {
+      // No Town Center (should not happen): fall back to anything we own rather
+      // than leaving the camera on the map centre.
+      for (const e of this.game.world.all()) {
+        if (e.owner === 0 && e.kind === EntityKind.Building) {
+          home = e;
+          break;
+        }
+      }
+    }
     if (!home) return;
+    this.homeFocusX = home.x;
+    this.homeFocusY = home.y;
     const camera = this.renderer.camera;
     camera.centerOn(home.x, home.y);
     // zoomBy takes a zoom-level multiplier; 1.6 brings the camera in from the
     // map-framing distance to roughly the default play distance.
     camera.zoomBy(1.6);
+    this.homeZoomApplied = true;
+  }
+
+  /**
+   * Keep the camera on the home base until the player takes control of it.
+   * Returns true when the framing was re-applied.
+   */
+  private holdHomeFraming(): boolean {
+    if (this.cameraTouched || this.homeFocusX === null || this.homeFocusY === null) return false;
+    // Only during start-up: a few seconds of frames is plenty, and after that
+    // the player owns the camera.
+    if (this.frames > 240) return false;
+    const camera = this.renderer.camera;
+    const focus = camera.focus();
+    const drift = Math.hypot(focus.x - this.homeFocusX, focus.y - this.homeFocusY);
+    const coverage = this.renderer.groundCoverage();
+    if (drift < FP_ONE && coverage > 0.9) return false;
+    camera.centerOn(this.homeFocusX, this.homeFocusY);
+    if (!this.homeZoomApplied) {
+      camera.zoomBy(1.6);
+      this.homeZoomApplied = true;
+    }
+    return true;
+  }
+
+  /** Called by any player camera action, which hands the camera over. */
+  notifyCameraInput(): void {
+    this.cameraTouched = true;
   }
 
   /* ---------------------------------------------------------------- *
@@ -271,6 +325,7 @@ export class GameSession {
   }
 
   private drawFrame(): void {
+    this.holdHomeFraming();
     const snapshot = this.game.snapshot();
     this.lastSnapshot = snapshot;
 
