@@ -84,6 +84,47 @@ Delivery:
       deploy, e2e) on every push to main.
 - [x] Deployed with wrangler to https://aegis-of-ages.guhcostan.workers.dev.
 
+## Reported bug: the simulated player never leaves the Dark Age (fixed, partly)
+
+The user ran the simulated player themselves and reported the player hoarding food
+(9840) with almost no wood (26), stuck in the Dark Age, and the default match
+ending on the time limit. Reproduced headless through the same path and found a
+chain of five real defects, all fixed:
+
+1. **The villager distribution was blind to the real bottleneck.** It allocated by
+   fixed percentage shares, so a bot with three villagers, 45 food and 2,000 wood
+   was "correctly" staffed and never recovered. Allocation now adds a stock
+   pressure term: food is strongly preferred while the bank is below what the next
+   landmark costs, wood below 150, gold below the landmark's gold.
+2. **My first attempt at (1) made it worse.** The pressure term fed the rebalance
+   threshold, so the bot shuffled six villagers every few seconds and nobody ever
+   finished a gathering trip: measured at 90 food and 50 wood gathered in a whole
+   match. The move limit now uses the share deficit, moves at most three, and
+   never touches a villager who is already carrying a load.
+3. **Saving for the age-up was disabled exactly when it mattered.** The old rule
+   skipped banking below twelve villagers, so a raided bot at three villagers
+   never saved. Saving is now a pure resource question, time-boxed to six minutes
+   so it cannot become permanent, and abandoned while the base is under attack.
+4. **Villagers were massacred and never replaced usefully.** Evacuation only
+   looked 18 tiles around the home base, so raids on distant camps were ignored
+   (49 villagers killed in twenty minutes). It is now measured around each
+   villager, sends them to the nearest shelter, and - critically - releases them
+   again once the raid passes; the first version garrisoned them permanently and
+   the economy simply stopped.
+5. **Production queues grew without limit.** The bot enqueued a villager per
+   decision and never cancelled: measured at **195 villagers queued at once**,
+   each spawning straight into the enemy raiders (69 trained, 72 lost in twenty
+   minutes). Villager and military queues are now capped at two.
+
+Measured effect: the bots now reach **Imperial Age with three landmarks each**,
+where before they sat in the Dark Age for the whole match.
+
+Still open: with the default settings two Intermediate bots grind each other's
+economies down and the match often reaches the time limit without a winner. They
+do conclude in measured configurations (small map / seed 1234 / Hard vs Easy in
+~32 min; medium / seed 99 / Hard vs Intermediate in ~6 min), which is what the
+acceptance tests use.
+
 ## Reported bug, third round: black viewport (pixel-level verification added)
 
 The report came back with sharper evidence: the renderer draws (16 draw calls,

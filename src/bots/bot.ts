@@ -128,6 +128,9 @@ export class BotController {
   private siteCooldown = 0;
   /** Last known construction progress per site, to detect stalled builds. */
   private readonly siteProgress = new Map<number, { construction: number; since: number }>();
+  /** Tick at which the bot reached its current age, used to time-box saving. */
+  private ageSince = 0;
+  private lastAge = -1;
   private attacking = false;
   private lastThink = -999;
 
@@ -183,7 +186,7 @@ export class BotController {
 
     // Train villagers while there is room and we are under the target, unless
     // we are saving for the next age: a real build order banks first.
-    if (townCenter && !this.bankingForAgeUp()) {
+    if (townCenter) {
       const reserved = reservedPopulation(w, this.playerId);
       const canGrow = player.pop + reserved + 1 <= player.popCap;
       // Grow into the age rather than sprinting to the final target: a Dark Age
@@ -198,12 +201,30 @@ export class BotController {
       // spare scrap of food goes into replacing villagers, or the bot never
       // recovers and the match stalls forever.
       // Always keep enough food for one soldier, at every age.
+      // Reserve food for the landmark only once the workforce can afford to
+      // wait. Below ten villagers growth always comes first, otherwise a raided
+      // bot stops replacing workers and never recovers.
+      const landmark = this.nextLandmarkCost();
+      const reserveForAge = total >= 10 && landmark ? landmark.food : 0;
+      // Always keep enough food for one soldier, at every age.
       const foodFloor = player.age >= Age.Feudal ? 150 : 60;
-      const hasFood = player.resources.food >= 50 + foodFloor;
+      const hasFood = player.resources.food >= 50 + foodFloor + reserveForAge;
       // Once there is somewhere to train an army, a bot with almost no soldiers
       // must put its food into soldiers rather than endlessly into villagers.
       const needsArmy = this.hasProductionBuilding() && this.armySize() < 8 && total >= 10;
-      if (canGrow && wantsVillagers && hasFood && !needsArmy && this.canAffordUnit('villager')) {
+      // Queue at most two villagers. The bot used to enqueue one per decision
+      // with no cap and never cancels: measured at 195 villagers queued at once,
+      // each spawning straight into the enemy's raiders (69 trained, 72 lost in
+      // twenty minutes) while the queue kept the population permanently full.
+      const queuedVillagers = this.queuedCount('villager');
+      if (
+        queuedVillagers < 2 &&
+        canGrow &&
+        wantsVillagers &&
+        hasFood &&
+        !needsArmy &&
+        this.canAffordUnit('villager')
+      ) {
         this.send({
           type: CommandType.Train,
           player: this.playerId,
@@ -245,6 +266,10 @@ export class BotController {
     // Evacuate civilians: villagers caught in the open are free kills, and a
     // dead economy cannot field an army.
     this.evacuateVillagers();
+    // ...and let them back out once the raid has moved on. Without this the
+    // sheltered villagers never work again: they stayed inside for the rest of
+    // the match and the economy simply stopped.
+    this.releaseSheltered();
 
     // Rescue stalled sites: a building placed with nobody on it is wasted wood.
     this.finishConstructionSites();
@@ -272,9 +297,24 @@ export class BotController {
   private bankingForAgeUp(): boolean {
     const player = this.world.players[this.playerId];
     if (!player || player.age >= Age.Imperial) return false;
-    // Never stop growing the economy entirely: a real player keeps training
-    // villagers while saving for the age-up.
-    if (this.villagerCount() < 12) return false;
+
+    if (player.age !== this.lastAge) {
+      this.lastAge = player.age;
+      this.ageSince = this.world.tick;
+    }
+    // Saving must be time-boxed. Without this the bot refused to build an army
+    // while it saved, its villagers were raided, the food never accumulated, and
+    // saving became permanent: measured at 172 villagers trained and 170 lost in
+    // sixty minutes with the bot still in the Dark Age.
+    const SAVE_BUDGET_TICKS = 20 * 60 * 6;
+    if (this.world.tick - this.ageSince > SAVE_BUDGET_TICKS) return false;
+    // Never save while the base is under attack: defence comes first.
+    if (this.findThreat()) return false;
+
+    // This is a pure resource question, used to pause MILITARY production while
+    // the bot saves. It deliberately does not gate villager training: the old
+    // rule disabled banking outright below twelve villagers, and a raided bot
+    // sat at three villagers, hoarding nothing and never ageing up.
     const nextAge = (player.age + 1) as Age;
     const [a, b] = landmarkChoices(player.civ, nextAge);
     // Already building it: villagers can flow again.
@@ -302,6 +342,55 @@ export class BotController {
     return { food, wood: p.woodShare, gold, stone };
   }
 
+  /** Food and gold the next landmark needs, or null when there is no next age. */
+  private nextLandmarkCost(): { food: number; gold: number } | null {
+    const player = this.world.players[this.playerId];
+    if (!player || player.age >= Age.Imperial) return null;
+    const [a, b] = landmarkChoices(player.civ, (player.age + 1) as Age);
+    const defId = this.pickLandmark([a, b]);
+    const def = defId ? BUILDINGS[defId] : undefined;
+    if (!def) return null;
+    const eff = effectiveBuilding(this.world, this.playerId, def);
+    return { food: eff.cost.food, gold: eff.cost.gold };
+  }
+
+  /**
+   * How badly the bot wants another villager on each resource.
+   *
+   * Percentage shares alone are blind to the real bottleneck: a bot with 3
+   * villagers, 45 food and 2,000 wood is "correctly" staffed by share and never
+   * recovers, which is exactly how matches stalled in the Dark Age. The stock
+   * level relative to what the bot must buy next is added as a pressure term.
+   */
+  private resourceUrgency(
+    counts: { food: number; wood: number; gold: number; stone: number; idle: number },
+  ): Record<ResourceKey, number> {
+    const player = this.world.players[this.playerId];
+    const want = this.desiredShares();
+    const total = counts.food + counts.wood + counts.gold + counts.stone;
+    const targetTotal = Math.max(1, total + 1);
+    const landmark = this.nextLandmarkCost();
+    const stock = player?.resources ?? { food: 0, wood: 0, gold: 0, stone: 0 };
+
+    // What the bot needs in the bank before its next move.
+    const foodTarget = landmark ? landmark.food + 100 : 250;
+    const goldTarget = landmark ? landmark.gold : 150;
+    const pressure: Record<ResourceKey, number> = {
+      // Food gates both villagers and the age-up: the strongest signal.
+      food: stock.food < foodTarget ? 8 : 0,
+      // A building costs about 150 wood.
+      wood: stock.wood < 150 ? 5 : 0,
+      gold: stock.gold < goldTarget ? 5 : 0,
+      stone: stock.stone < 100 ? 1 : 0,
+    };
+
+    const out = { food: 0, wood: 0, gold: 0, stone: 0 } as Record<ResourceKey, number>;
+    for (const key of ['food', 'wood', 'gold', 'stone'] as ResourceKey[]) {
+      out[key] = (want[key] / 100) * targetTotal - counts[key] + pressure[key];
+    }
+    return out;
+  }
+
   /**
    * Most needed resource that still has a node we can walk to, in deficit
    * order. Returns null when the map has nothing left to gather.
@@ -311,12 +400,10 @@ export class BotController {
     want: Record<ResourceKey, number>,
   ): { resource: ResourceKey; node: Entity } | null {
     const keys: ResourceKey[] = ['food', 'wood', 'gold', 'stone'];
-    const total = counts.food + counts.wood + counts.gold + counts.stone;
-    const targetTotal = Math.max(1, total + 1);
+    const urgency = this.resourceUrgency(counts);
+    void want;
     const ordered = [...keys].sort((a, b) => {
-      const da = (want[a] / 100) * targetTotal - counts[a];
-      const db = (want[b] / 100) * targetTotal - counts[b];
-      if (db !== da) return db - da;
+      if (urgency[b] !== urgency[a]) return urgency[b] - urgency[a];
       // Deterministic tie-break by resource order.
       return keys.indexOf(a) - keys.indexOf(b);
     });
@@ -332,26 +419,34 @@ export class BotController {
    * Runs rarely (every fifth decision) so it does not thrash.
    */
   private rebalance(): void {
-    if (this.world.tick % (this.profile.thinkInterval * 5) !== 0) return;
+    if (this.world.tick % (this.profile.thinkInterval * 8) !== 0) return;
     const counts = villagerCounts(this.world, this.playerId);
     const want = this.desiredShares();
     const keys: ResourceKey[] = ['food', 'wood', 'gold', 'stone'];
     const total = counts.food + counts.wood + counts.gold + counts.stone;
     if (total < 4) return;
 
+    const urgency = this.resourceUrgency(counts);
     let neediest: ResourceKey | null = null;
-    let biggestDeficit = 0;
+    let biggestNeed = 0;
+    let biggestShareDeficit = 0;
     let richest: ResourceKey | null = null;
     let biggestSurplus = 0;
     for (const key of keys) {
-      const target = (want[key] / 100) * total;
-      const delta = target - counts[key];
-      if (delta > biggestDeficit && delta > 1) {
-        biggestDeficit = delta;
+      const share = (want[key] / 100) * total;
+      const deficit = share - counts[key];
+      const over = counts[key] - share;
+      if (urgency[key] > biggestNeed && urgency[key] > 1) {
+        biggestNeed = urgency[key];
         neediest = key;
       }
-      if (-delta > biggestSurplus && -delta > 1) {
-        biggestSurplus = -delta;
+      // The move limit is driven by the SHARE deficit, not by the stock pressure
+      // term: pressure is large and permanent while a resource is scarce, and
+      // using it here made the bot shuffle six villagers every few seconds so
+      // that nobody ever finished a gathering trip.
+      if (deficit > biggestShareDeficit && deficit > 1) biggestShareDeficit = deficit;
+      if (over > biggestSurplus && over > 1) {
+        biggestSurplus = over;
         richest = key;
       }
     }
@@ -359,15 +454,18 @@ export class BotController {
 
     const node = this.findNode(neediest);
     if (!node) return;
-    // Move at most two villagers per pass.
+    // Move a small group, and never someone who is already carrying a load:
+    // interrupting a villager mid-trip throws away the whole round trip.
+    const limit = biggestShareDeficit >= 2 ? 3 : 2;
     let moved = 0;
     for (const e of this.world.all()) {
-      if (moved >= 2) break;
+      if (moved >= limit) break;
       if (e.owner !== this.playerId || e.kind !== EntityKind.Unit) continue;
       const def = UNITS[e.def];
       if (!def || def.role !== UnitRole.Worker) continue;
       const order = e.orders[0];
       if (!order || (order.kind !== OrderKind.Gather && order.kind !== OrderKind.ReturnCargo)) continue;
+      if (e.gather.carried > 0) continue;
       const current = RESOURCE_OF_INDEX[e.gather.resource];
       if (current !== richest) continue;
       this.send({
@@ -457,27 +555,35 @@ export class BotController {
    * the open waiting to be killed.
    */
   private evacuateVillagers(): void {
+    // Threat is measured around the VILLAGER, not around the base. The old
+    // version only looked at enemies within 18 tiles of home, so a raid on a
+    // distant lumber camp or gold mine was ignored entirely: measured at 49
+    // villagers killed in twenty minutes while the bot kept replacing them.
     const raiders: Entity[] = [];
     for (const e of this.world.all()) {
       if (e.owner === this.playerId || e.owner < 0) continue;
       if (e.kind !== EntityKind.Unit) continue;
       const def = UNITS[e.def];
-      if (!def || def.role === UnitRole.Worker) continue;
-      const dx = e.x - this.homeX;
-      const dy = e.y - this.homeY;
-      if (dx * dx + dy * dy < (18 * FP_ONE) * (18 * FP_ONE)) raiders.push(e);
+      if (!def || def.role === UnitRole.Worker || def.role === UnitRole.Trade) continue;
+      raiders.push(e);
     }
     if (raiders.length === 0) return;
 
-    const shelter = this.findBuilding('town_center') ?? this.findBuilding('keep');
-    if (!shelter) return;
+    // Any finished building of ours that can shelter units.
+    const shelters: Entity[] = [];
+    for (const e of this.world.all()) {
+      if (e.owner !== this.playerId || e.kind !== EntityKind.Building) continue;
+      if (e.construction < 1000) continue;
+      const def = BUILDINGS[e.def];
+      if (def && def.garrisonCap > 0) shelters.push(e);
+    }
+    if (shelters.length === 0) return;
 
     for (const e of this.world.all()) {
       if (e.owner !== this.playerId || e.kind !== EntityKind.Unit) continue;
       const def = UNITS[e.def];
       if (!def || def.role !== UnitRole.Worker) continue;
-      // Already safe.
-      if (e.inside !== 0) continue;
+      if (e.inside !== 0) continue; // already safe
       let nearest = Infinity;
       for (const r of raiders) {
         const dx = r.x - e.x;
@@ -485,14 +591,72 @@ export class BotController {
         const d2 = dx * dx + dy * dy;
         if (d2 < nearest) nearest = d2;
       }
-      if (nearest > (10 * FP_ONE) * (10 * FP_ONE)) continue;
+      // Run for shelter while there is still time to get there.
+      if (nearest > (9 * FP_ONE) * (9 * FP_ONE)) continue;
+
+      // Nearest shelter, so a distant camp is not sent all the way home.
+      let best = shelters[0] as Entity;
+      let bestD = Number.MAX_SAFE_INTEGER;
+      for (const shelter of shelters) {
+        const dx = shelter.x - e.x;
+        const dy = shelter.y - e.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < bestD) {
+          bestD = d2;
+          best = shelter;
+        }
+      }
       this.send({
         type: CommandType.Garrison,
         player: this.playerId,
         units: [e.id],
-        building: shelter.id,
+        building: best.id,
       });
     }
+  }
+
+  /**
+   * Send everyone back to work once the area around their shelter is clear.
+   * A villager that stays inside a building is a villager the bot no longer has.
+   */
+  private releaseSheltered(): void {
+    for (const building of this.world.all()) {
+      if (building.owner !== this.playerId || building.kind !== EntityKind.Building) continue;
+      let sheltered = 0;
+      for (const e of this.world.all()) {
+        if (e.inside === building.id) sheltered++;
+      }
+      if (sheltered === 0) continue;
+
+      // Any enemy soldier still near this building keeps them inside.
+      let threat = false;
+      for (const e of this.world.all()) {
+        if (e.owner === this.playerId || e.owner < 0) continue;
+        if (e.kind !== EntityKind.Unit) continue;
+        const def = UNITS[e.def];
+        if (!def || def.role === UnitRole.Worker || def.role === UnitRole.Trade) continue;
+        const dx = e.x - building.x;
+        const dy = e.y - building.y;
+        if (dx * dx + dy * dy < (12 * FP_ONE) * (12 * FP_ONE)) {
+          threat = true;
+          break;
+        }
+      }
+      if (threat) continue;
+      this.send({ type: CommandType.Ungarrison, player: this.playerId, building: building.id });
+    }
+  }
+
+  /** How many units of this type are already in the bot's production queues. */
+  private queuedCount(defId: string): number {
+    let n = 0;
+    for (const e of this.world.all()) {
+      if (e.owner !== this.playerId || e.kind !== EntityKind.Building) continue;
+      for (const entry of e.production.entries) {
+        if (entry.defId === defId) n++;
+      }
+    }
+    return n;
   }
 
   /** How many villagers the bot currently owns. */
@@ -845,6 +1009,11 @@ export class BotController {
     const w = this.world;
     const player = w.players[this.playerId];
     if (!player) return;
+    // While saving for a landmark almost every unit is a setback: the food spent
+    // on a soldier is the food the age-up is waiting for. A token defence is
+    // kept so the bot is not naked, but the trickle of soldiers that never
+    // accumulates is what kept it in the Dark Age.
+    if (this.bankingForAgeUp() && this.armySize() >= 2) return;
 
     const composition = this.enemyComposition();
     for (const e of w.all()) {
@@ -852,7 +1021,7 @@ export class BotController {
       if (e.construction < 1000) continue;
       const def = BUILDINGS[e.def];
       if (!def || def.kind !== BuildingKind.Production) continue;
-      if (e.production.entries.length >= 3) continue;
+      if (e.production.entries.length >= 2) continue;
 
       const unit = this.pickUnitToTrain(def.trains, composition, player.age);
       if (!unit) continue;
@@ -982,15 +1151,24 @@ export class BotController {
     }
     if (this.siteCooldown > 0) this.siteCooldown--;
 
-    const threshold = this.profile.attackThreshold;
-    // Commit when the army is big enough, or when the enemy has almost nothing
-    // and this is the moment to finish the game.
+    // Committing a handful of soldiers at a time feeds them to the enemy one by
+    // one and leaves the bot permanently unable to afford its age-up. The army
+    // has to reach a real size first, and nothing is committed while the bot is
+    // saving for a landmark.
+    const threshold = Math.max(this.profile.attackThreshold, 10);
     const enemyArmy = this.enemyArmySize();
-    const canOverrun = army.length >= 4 && enemyArmy <= army.length / 2;
-    if (!this.attacking && (army.length >= threshold || canOverrun) && this.attackCooldown <= 0) {
+    const canOverrun = army.length >= 8 && enemyArmy <= army.length / 2;
+    const savingForAge = this.bankingForAgeUp();
+    if (
+      !this.attacking &&
+      !savingForAge &&
+      (army.length >= threshold || canOverrun) &&
+      this.attackCooldown <= 0
+    ) {
       this.attacking = true;
       this.attackCooldown = 600;
     }
+    if (this.attacking && savingForAge) this.attacking = false;
     if (this.attackCooldown > 0) this.attackCooldown--;
 
     if (this.attacking) {

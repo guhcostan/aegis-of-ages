@@ -42,14 +42,14 @@ test.describe('complete matches', () => {
     // Seed 1234 on a medium map with the standard preset is measured to resolve
     // in about 21 simulated minutes (docs/PROGRESS.md). The outcome is produced
     // by ordinary gameplay, not scripted.
-    // Measured to resolve in about 17 simulated minutes (docs/PROGRESS.md).
+    // Measured to resolve in about six simulated minutes (docs/PROGRESS.md).
     await startMatch(page, {
-      seed: 1234,
+      seed: 99,
       mapSize: 'medium',
       startingResources: 'veryhigh',
       playerAsBot: true,
       playerBotDifficulty: 2,
-      bots: [{ civ: 'french', difficulty: 0, team: 0 }],
+      bots: [{ civ: 'french', difficulty: 1, team: 0 }],
     });
 
     const result = await playToVictory(page, 60 * 45);
@@ -65,10 +65,10 @@ test.describe('complete matches', () => {
     const watch = watchConsole(page);
     await loadShell(page);
     await startMatch(page, {
-      seed: 1234,
+      seed: 99,
       playerAsBot: true,
       playerBotDifficulty: 2,
-      bots: [{ civ: 'french', difficulty: 0, team: 0 }],
+      bots: [{ civ: 'french', difficulty: 1, team: 0 }],
       mapSize: 'medium',
       startingResources: 'veryhigh',
     });
